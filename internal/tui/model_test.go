@@ -32,10 +32,11 @@ func newTestModel(t *testing.T) Model {
 
 func TestEmptyDashboardRendersPlaceholders(t *testing.T) {
 	m := newTestModel(t)
-	// Apply one refresh synchronously.
-	cmd := refreshCmd(m)
+	// Initialize the viewport so the dashboard is rendered through it.
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 100})
+	cmd := refreshCmd(mm.(Model))
 	msg := cmd().(refreshMsg)
-	mm, _ := m.Update(msg)
+	mm, _ = mm.Update(msg)
 	out := mm.(Model).View()
 
 	for _, want := range []string{"claudeops", "Subscription usage", "Today", "Top sessions", "Top projects", "Active task", "no active task"} {
@@ -64,8 +65,9 @@ func TestDashboardWithDataShowsNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg := refreshCmd(m)().(refreshMsg)
-	mm, _ := m.Update(msg)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 100})
+	msg := refreshCmd(mm.(Model))().(refreshMsg)
+	mm, _ = mm.Update(msg)
 	out := mm.(Model).View()
 
 	for _, want := range []string{"events: 1", "demo task", "alpha", "€2.5"} {
