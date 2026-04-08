@@ -19,6 +19,19 @@ Shows **real** subscription % from Anthropic's `/api/oauth/usage` endpoint — n
 go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
 ```
 
+If `claudeops` is still "command not found" after installation, your Go bin directory is probably not on `PATH` yet:
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+Add that line to your shell config (`~/.bashrc`, `~/.zshrc`, etc.), reload the shell, and verify:
+
+```bash
+which claudeops
+claudeops version
+```
+
 Or build locally:
 
 ```bash
