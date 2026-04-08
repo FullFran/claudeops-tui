@@ -81,3 +81,42 @@ func TestQuitOnQ(t *testing.T) {
 		t.Fatal("expected quit cmd")
 	}
 }
+
+func TestTabSwitchingByNumberKeys(t *testing.T) {
+	m := newTestModel(t)
+	// Apply window size so the viewport is ready.
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	for key, want := range map[string]Tab{"2": TabSessions, "3": TabProjects, "4": TabModels, "5": TabTasks, "1": TabDashboard} {
+		mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		if got := mm.(Model).activeTab; got != want {
+			t.Errorf("key %q → tab %v, want %v", key, got, want)
+		}
+	}
+}
+
+func TestAllTabsRenderWithoutPanic(t *testing.T) {
+	m := newTestModel(t)
+	ctx := context.Background()
+	cost := 1.5
+	ev := store.Event{
+		UUID: "u1", SessionID: "s1", CWD: "/p/alpha", Type: "assistant",
+		Model: "claude-sonnet-4-6", TS: time.Now().UTC(),
+		InTokens: 10, OutTokens: 20, CacheReadTokens: 30, CacheCreateTokens: 40,
+	}
+	_ = m.Store.Insert(ctx, ev, &cost, nil)
+	_, _ = m.Tasks.Start(ctx, "demo")
+
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 50})
+	mm, _ = mm.Update(refreshCmd(mm.(Model))().(refreshMsg))
+
+	for _, tab := range []Tab{TabDashboard, TabSessions, TabProjects, TabModels, TabTasks} {
+		mm2, _ := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune('1' + int(tab))}})
+		out := mm2.(Model).View()
+		if !strings.Contains(out, tab.String()) {
+			t.Errorf("tab %s: expected its name in view\n--\n%s", tab, out)
+		}
+		if strings.Contains(out, "panic") {
+			t.Errorf("tab %s: panic in view", tab)
+		}
+	}
+}
