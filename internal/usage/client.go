@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -85,9 +86,25 @@ type Client struct {
 	CredsPath   string
 	HTTP        *http.Client
 	CacheTTL    time.Duration
+	// DefaultBackoff is used when the server returns 429/5xx without a
+	// Retry-After header. Anthropic's undocumented usage endpoint is shared
+	// with Claude Code itself, so the safest default is conservative.
+	DefaultBackoff time.Duration
 
-	mu       sync.Mutex
-	cached   *Snapshot
+	mu             sync.Mutex
+	cached         *Snapshot
+	cachedErr      error
+	cachedErrUntil time.Time
+}
+
+// ErrRateLimited is returned while the negative cache window is active.
+// Wraps a message with the remaining backoff so the TUI can show it.
+type rateLimitedError struct {
+	retryAfter time.Duration
+}
+
+func (e *rateLimitedError) Error() string {
+	return fmt.Sprintf("usage endpoint rate-limited (HTTP 429); retrying in %s", e.retryAfter.Round(time.Second))
 }
 
 // New builds a Client with sensible defaults. Pass the path to
@@ -98,8 +115,9 @@ func New(credsPath string) *Client {
 		RefreshURL: DefaultRefreshURL,
 		UserAgent:  "claudeops/0.1",
 		CredsPath:  credsPath,
-		HTTP:       &http.Client{Timeout: 10 * time.Second},
-		CacheTTL:   60 * time.Second,
+		HTTP:           &http.Client{Timeout: 10 * time.Second},
+		CacheTTL:       60 * time.Second,
+		DefaultBackoff: 5 * time.Minute,
 	}
 }
 
@@ -111,6 +129,14 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 		s := *c.cached
 		c.mu.Unlock()
 		return s, nil
+	}
+	// Negative cache: if a recent call hit 429/5xx, do not retry until the
+	// backoff window has elapsed. This prevents us from compounding the
+	// rate-limit (Anthropic's endpoint is shared with Claude Code itself).
+	if c.cachedErr != nil && time.Now().Before(c.cachedErrUntil) {
+		err := c.cachedErr
+		c.mu.Unlock()
+		return Snapshot{}, err
 	}
 	c.mu.Unlock()
 
@@ -129,7 +155,7 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 		}
 	}
 
-	snap, status, err := c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
+	snap, status, retryAfter, err := c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -138,10 +164,24 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 		if err := c.refresh(ctx, creds); err != nil {
 			return Snapshot{}, err
 		}
-		snap, status, err = c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
+		snap, status, retryAfter, err = c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
 		if err != nil {
 			return Snapshot{}, err
 		}
+	}
+	if status == http.StatusTooManyRequests || status >= 500 {
+		// Negative-cache the failure so we stop hammering the endpoint.
+		// Honor Retry-After when present; fall back to DefaultBackoff.
+		backoff := retryAfter
+		if backoff <= 0 {
+			backoff = c.DefaultBackoff
+		}
+		rerr := &rateLimitedError{retryAfter: backoff}
+		c.mu.Lock()
+		c.cachedErr = rerr
+		c.cachedErrUntil = time.Now().Add(backoff)
+		c.mu.Unlock()
+		return Snapshot{}, rerr
 	}
 	if status >= 400 {
 		return Snapshot{}, fmt.Errorf("usage endpoint returned HTTP %d", status)
@@ -150,31 +190,54 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 	snap.FetchedAt = time.Now()
 	c.mu.Lock()
 	c.cached = &snap
+	// Clear any prior negative cache on success.
+	c.cachedErr = nil
+	c.cachedErrUntil = time.Time{}
 	c.mu.Unlock()
 	return snap, nil
 }
 
-func (c *Client) fetch(ctx context.Context, token string) (Snapshot, int, error) {
+// fetch performs a single HTTP GET. It returns the parsed snapshot (on 200),
+// the HTTP status, the parsed Retry-After duration (0 if absent), and any
+// transport-level error.
+func (c *Client) fetch(ctx context.Context, token string) (Snapshot, int, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.UsageURL, nil)
 	if err != nil {
-		return Snapshot{}, 0, err
+		return Snapshot{}, 0, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", AnthropicBetaHeader)
 	req.Header.Set("User-Agent", c.UserAgent)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return Snapshot{}, 0, err
+		return Snapshot{}, 0, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Snapshot{}, resp.StatusCode, nil
+		return Snapshot{}, resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After")), nil
 	}
 	var s Snapshot
 	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
-		return Snapshot{}, resp.StatusCode, err
+		return Snapshot{}, resp.StatusCode, 0, err
 	}
-	return s, resp.StatusCode, nil
+	return s, resp.StatusCode, 0, nil
+}
+
+// parseRetryAfter accepts either delta-seconds or an HTTP-date and returns
+// the resulting duration. Returns 0 when the header is missing or unparseable.
+func parseRetryAfter(h string) time.Duration {
+	if h == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(strings.TrimSpace(h)); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 type refreshResp struct {

@@ -188,6 +188,58 @@ func TestSnapshotHandlesNullBuckets(t *testing.T) {
 	}
 }
 
+func TestRateLimitNegativeCache(t *testing.T) {
+	dir := t.TempDir()
+	credsPath := writeCreds(t, dir, validCreds(time.Now().Add(time.Hour)))
+
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "120")
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := New(credsPath)
+	c.UsageURL = srv.URL
+
+	// First call: hits the server, gets 429, populates negative cache.
+	_, err := c.Get(context.Background())
+	if err == nil {
+		t.Fatal("expected rate-limit error on first call")
+	}
+	if !contains(err.Error(), "rate-limited") {
+		t.Errorf("error message: %v", err)
+	}
+
+	// Subsequent calls within the backoff window must NOT hit the server.
+	for i := 0; i < 5; i++ {
+		if _, err := c.Get(context.Background()); err == nil {
+			t.Fatal("expected cached rate-limit error")
+		}
+	}
+	if calls.Load() != 1 {
+		t.Errorf("server hit %d times; want 1 (negative cache should suppress retries)", calls.Load())
+	}
+
+	// Verify Retry-After was honored (~120s window).
+	c.mu.Lock()
+	remaining := time.Until(c.cachedErrUntil)
+	c.mu.Unlock()
+	if remaining < 110*time.Second || remaining > 121*time.Second {
+		t.Errorf("Retry-After window: got %s, want ~120s", remaining)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNoOAuthDegradesGracefully(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, ".credentials.json")
