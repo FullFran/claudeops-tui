@@ -1,0 +1,50 @@
+schema: spec-driven
+
+context: |
+  Project: ClaudeOps-TUI — Local TUI to track Claude Code usage, costs, and tasks.
+  Stack (planned): Go 1.22+, Bubbletea (TUI), SQLite via modernc.org/sqlite (no CGO), fsnotify.
+  Architecture: hexagonal-lite — cmd/claudeops entrypoint, internal/{parser,collector,store,pricing,usage,tasks,tui}.
+  Testing: Go built-in `go test`, table-driven tests, testify optional.
+  Style: gofmt + go vet + golangci-lint.
+  Status: greenfield — no code yet.
+
+strict_tdd: true
+
+testing:
+  test_runner:
+    command: "go test ./..."
+    framework: "go test (built-in)"
+  layers:
+    unit: { available: true, tool: "go test" }
+    integration: { available: true, tool: "net/http/httptest (built-in)" }
+    e2e: { available: false, tool: null }
+  coverage:
+    available: true
+    command: "go test -cover ./..."
+  quality:
+    linter: { available: true, command: "golangci-lint run" }
+    type_checker: { available: true, command: "go vet ./..." }
+    formatter: { available: true, command: "gofmt -w ." }
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Identify affected modules/packages
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group tasks by phase (infrastructure, implementation, testing)
+    - Use hierarchical numbering (1.1, 1.2, etc.)
+    - Keep tasks small enough to complete in one session
+  apply:
+    - Follow existing code patterns and conventions
+    - Load relevant coding skills for the project stack
+  verify:
+    - Run tests if test infrastructure exists
+    - Compare implementation against every spec scenario
+  archive:
+    - Warn before merging destructive deltas (large removals)

@@ -1,0 +1,18 @@
+# Go
+*.exe
+*.test
+*.out
+/claudeops
+/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Local data (never commit)
+*.db
+*.db-wal
+*.db-shm
