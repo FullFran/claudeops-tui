@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/fullfran/claudeops-tui/internal/config"
 	"github.com/fullfran/claudeops-tui/internal/pricing"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
@@ -90,6 +91,76 @@ func TestTabSwitchingByNumberKeys(t *testing.T) {
 		mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 		if got := mm.(Model).activeTab; got != want {
 			t.Errorf("key %q → tab %v, want %v", key, got, want)
+		}
+	}
+}
+
+func TestDashboardWidgetsRespectSettings(t *testing.T) {
+	m := newTestModel(t)
+	// Disable everything except Today.
+	settings := config.DefaultSettings()
+	settings.Dashboard.ShowSubscription = false
+	settings.Dashboard.ShowTopSessions = false
+	settings.Dashboard.ShowTopProjects = false
+	settings.Dashboard.ShowSparkline14d = false
+	settings.Dashboard.ShowPerModelToday = false
+	settings.Dashboard.ShowBurnRate = false
+	settings.Dashboard.ShowStreak = false
+	settings.Dashboard.ShowAvgPerSession = false
+	settings.Dashboard.ShowMaxDay30d = false
+	settings.Dashboard.ShowActiveTask = false
+	m.Settings = settings
+
+	out := renderDashboardTab(m)
+	if strings.Contains(out, "Subscription usage") || strings.Contains(out, "Top sessions") ||
+		strings.Contains(out, "Top projects") || strings.Contains(out, "Last 14 days") ||
+		strings.Contains(out, "Active task") {
+		t.Errorf("disabled widgets should not render:\n%s", out)
+	}
+	if !strings.Contains(out, "Today") {
+		t.Errorf("Today widget should still render:\n%s", out)
+	}
+}
+
+func TestSparklineColorsByThreshold(t *testing.T) {
+	days := []store.DailyAgg{
+		{CostEUR: 1},
+		{CostEUR: 25},
+		{CostEUR: 60},
+		{CostEUR: 0},
+	}
+	out := sparkline(days, config.ThresholdsSettings{DailyWarnEUR: 20, DailyAlertEUR: 50})
+	if out == "" {
+		t.Fatal("expected non-empty sparkline")
+	}
+	// Sanity: zero day must be a dim dot, others must contain at least one block char.
+	if !strings.Contains(out, "·") {
+		t.Errorf("zero day should render as dot: %q", out)
+	}
+}
+
+func TestCurrentStreakWalksBackwards(t *testing.T) {
+	mk := func(days ...int64) []store.DailyAgg {
+		out := make([]store.DailyAgg, len(days))
+		for i, n := range days {
+			out[i] = store.DailyAgg{Events: n}
+		}
+		return out
+	}
+	cases := []struct {
+		name  string
+		input []store.DailyAgg
+		want  int
+	}{
+		{"empty", nil, 0},
+		{"single zero", mk(0), 0},
+		{"trailing run with active today", mk(0, 0, 1, 1, 1), 3},
+		{"empty today is grace period", mk(0, 1, 1, 1, 0), 3},
+		{"broken streak", mk(1, 1, 0, 1, 1), 2},
+	}
+	for _, tc := range cases {
+		if got := currentStreak(tc.input); got != tc.want {
+			t.Errorf("%s: got %d want %d", tc.name, got, tc.want)
 		}
 	}
 }

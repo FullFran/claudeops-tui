@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/fullfran/claudeops-tui/internal/config"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
 	"github.com/fullfran/claudeops-tui/internal/usage"
@@ -21,6 +22,7 @@ type Model struct {
 	Store          *store.Store
 	Usage          *usage.Client
 	Tasks          *tasks.Tracker
+	Settings       config.Settings
 	PricingUpdated string
 	Version        string
 
@@ -33,6 +35,9 @@ type Model struct {
 	AllProj      []store.ProjectAgg
 	PerModel     []store.ModelAgg
 	AllTasks     []store.TaskAgg
+	Daily        []store.DailyAgg     // last 30 days, local TZ
+	PerModelToday []store.ModelAgg    // per-model breakdown for today only
+	BurnRate4h   float64              // €/hour over the last 4 hours
 	Snap         *usage.Snapshot
 	UsageErr     string
 	ActiveTask   *tasks.Task
@@ -51,8 +56,14 @@ type Model struct {
 	statusMsg     string // transient feedback (e.g. "task started: foo")
 }
 
-// New constructs a Model.
+// New constructs a Model. Settings defaults to DefaultSettings() so callers
+// (and tests) that don't care about config can omit it via NewWithSettings.
 func New(s *store.Store, u *usage.Client, tr *tasks.Tracker, pricingUpdated, version string) Model {
+	return NewWithSettings(s, u, tr, config.DefaultSettings(), pricingUpdated, version)
+}
+
+// NewWithSettings is the explicit constructor used by main.go.
+func NewWithSettings(s *store.Store, u *usage.Client, tr *tasks.Tracker, settings config.Settings, pricingUpdated, version string) Model {
 	ti := textinput.New()
 	ti.Placeholder = "task name…"
 	ti.CharLimit = 80
@@ -61,6 +72,7 @@ func New(s *store.Store, u *usage.Client, tr *tasks.Tracker, pricingUpdated, ver
 		Store:          s,
 		Usage:          u,
 		Tasks:          tr,
+		Settings:       settings,
 		PricingUpdated: pricingUpdated,
 		Version:        version,
 		activeTab:      TabDashboard,
@@ -105,17 +117,20 @@ func stopTaskCmd(tr *tasks.Tracker) tea.Cmd {
 }
 
 type refreshMsg struct {
-	today      store.Aggregates
-	last7d     store.Aggregates
-	topSess    []store.SessionAgg
-	allSess    []store.SessionAgg
-	topProj    []store.ProjectAgg
-	allProj    []store.ProjectAgg
-	perModel   []store.ModelAgg
-	allTasks   []store.TaskAgg
-	snap       *usage.Snapshot
-	usageErr   string
-	activeTask *tasks.Task
+	today         store.Aggregates
+	last7d        store.Aggregates
+	topSess       []store.SessionAgg
+	allSess       []store.SessionAgg
+	topProj       []store.ProjectAgg
+	allProj       []store.ProjectAgg
+	perModel      []store.ModelAgg
+	allTasks      []store.TaskAgg
+	daily         []store.DailyAgg
+	perModelToday []store.ModelAgg
+	burnRate4h    float64
+	snap          *usage.Snapshot
+	usageErr      string
+	activeTask    *tasks.Task
 }
 
 func tickCmd() tea.Cmd {
@@ -128,7 +143,10 @@ func refreshCmd(m Model) tea.Cmd {
 		defer cancel()
 
 		var msg refreshMsg
-		since7d := time.Now().Add(-7 * 24 * time.Hour)
+		now := time.Now()
+		since7d := now.Add(-7 * 24 * time.Hour)
+		since4h := now.Add(-4 * time.Hour)
+		startOfTodayLocal := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 		if m.Store != nil {
 			msg.today, _ = m.Store.AggregatesForToday(ctx)
 			msg.last7d, _ = m.Store.AggregatesSince(ctx, since7d)
@@ -138,6 +156,11 @@ func refreshCmd(m Model) tea.Cmd {
 			msg.allProj, _ = m.Store.TopProjectsByCost(ctx, 500, time.Time{})
 			msg.perModel, _ = m.Store.PerModelAggregates(ctx, time.Time{})
 			msg.allTasks, _ = m.Store.TaskAggregates(ctx)
+			msg.daily, _ = m.Store.DailyAggregatesLocal(ctx, 30)
+			msg.perModelToday, _ = m.Store.PerModelAggregates(ctx, startOfTodayLocal)
+			if a, err := m.Store.AggregatesSince(ctx, since4h); err == nil {
+				msg.burnRate4h = a.CostEUR / 4.0
+			}
 		}
 		if m.Usage != nil {
 			snap, err := m.Usage.Get(ctx)
@@ -268,6 +291,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.AllProj = msg.allProj
 		m.PerModel = msg.perModel
 		m.AllTasks = msg.allTasks
+		m.Daily = msg.daily
+		m.PerModelToday = msg.perModelToday
+		m.BurnRate4h = msg.burnRate4h
 		m.Snap = msg.snap
 		m.UsageErr = msg.usageErr
 		m.ActiveTask = msg.activeTask
