@@ -94,6 +94,75 @@ func TestTabSwitchingByNumberKeys(t *testing.T) {
 	}
 }
 
+func TestHelpOverlayToggle(t *testing.T) {
+	m := newTestModel(t)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if !mm.(Model).showHelp {
+		t.Fatal("? should open help")
+	}
+	out := mm.(Model).View()
+	if !strings.Contains(out, "keybindings") || !strings.Contains(out, "new task") {
+		t.Errorf("help overlay missing content:\n%s", out)
+	}
+	// Any key dismisses.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if mm.(Model).showHelp {
+		t.Fatal("any key should close help")
+	}
+}
+
+func TestNewTaskFromTUI(t *testing.T) {
+	m := newTestModel(t)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press `n` → opens input modal.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if !mm.(Model).taskInputOpen {
+		t.Fatal("n should open task input")
+	}
+
+	// Type a name. textinput consumes runes one at a time.
+	for _, r := range "refactor parser" {
+		mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Submit with enter → returns a startTaskCmd.
+	mm2, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter should return a start cmd")
+	}
+	if mm2.(Model).taskInputOpen {
+		t.Fatal("input should be closed after submit")
+	}
+	// Execute the cmd → produces a taskActionMsg, then apply it.
+	resMsg := cmd()
+	if _, ok := resMsg.(taskActionMsg); !ok {
+		t.Fatalf("expected taskActionMsg, got %T", resMsg)
+	}
+	mm3, _ := mm2.Update(resMsg)
+	if !strings.Contains(mm3.(Model).statusMsg, "task started") {
+		t.Errorf("status: %q", mm3.(Model).statusMsg)
+	}
+	// Tracker actually has the task.
+	if cur, ok := mm3.(Model).Tasks.Current(); !ok || cur.Name != "refactor parser" {
+		t.Errorf("tracker state wrong: %+v ok=%v", cur, ok)
+	}
+}
+
+func TestTaskInputEscCancels(t *testing.T) {
+	m := newTestModel(t)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if mm.(Model).taskInputOpen {
+		t.Fatal("esc should cancel input")
+	}
+	if _, ok := mm.(Model).Tasks.Current(); ok {
+		t.Fatal("no task should have been started")
+	}
+}
+
 func TestAllTabsRenderWithoutPanic(t *testing.T) {
 	m := newTestModel(t)
 	ctx := context.Background()
