@@ -4,8 +4,10 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -41,10 +43,20 @@ type Model struct {
 	width     int
 	height    int
 	ready     bool
+
+	// modal state
+	taskInput     textinput.Model
+	taskInputOpen bool
+	showHelp      bool
+	statusMsg     string // transient feedback (e.g. "task started: foo")
 }
 
 // New constructs a Model.
 func New(s *store.Store, u *usage.Client, tr *tasks.Tracker, pricingUpdated, version string) Model {
+	ti := textinput.New()
+	ti.Placeholder = "task name…"
+	ti.CharLimit = 80
+	ti.Width = 40
 	return Model{
 		Store:          s,
 		Usage:          u,
@@ -52,6 +64,7 @@ func New(s *store.Store, u *usage.Client, tr *tasks.Tracker, pricingUpdated, ver
 		PricingUpdated: pricingUpdated,
 		Version:        version,
 		activeTab:      TabDashboard,
+		taskInput:      ti,
 	}
 }
 
@@ -61,6 +74,35 @@ func (m Model) Init() tea.Cmd {
 }
 
 type tickMsg struct{}
+
+// taskActionMsg is the result of a Start/Stop call from the input modal.
+type taskActionMsg struct {
+	status string
+	err    error
+}
+
+func startTaskCmd(tr *tasks.Tracker, name string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		t, err := tr.Start(ctx, name)
+		if err != nil {
+			return taskActionMsg{err: err}
+		}
+		return taskActionMsg{status: "task started: " + t.Name}
+	}
+}
+
+func stopTaskCmd(tr *tasks.Tracker) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := tr.Stop(ctx); err != nil {
+			return taskActionMsg{err: err}
+		}
+		return taskActionMsg{status: "task stopped"}
+	}
+}
 
 type refreshMsg struct {
 	today      store.Aggregates
@@ -125,9 +167,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Modal input has priority: capture all keys except submit/cancel.
+		if m.taskInputOpen {
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.taskInputOpen = false
+				m.taskInput.Blur()
+				m.taskInput.SetValue("")
+				return m, nil
+			case "enter":
+				name := strings.TrimSpace(m.taskInput.Value())
+				m.taskInputOpen = false
+				m.taskInput.Blur()
+				m.taskInput.SetValue("")
+				if name == "" || m.Tasks == nil {
+					return m, nil
+				}
+				return m, startTaskCmd(m.Tasks, name)
+			}
+			var ic tea.Cmd
+			m.taskInput, ic = m.taskInput.Update(msg)
+			return m, ic
+		}
+		// Help overlay: any key dismisses it.
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "?":
+			m.showHelp = true
+			return m, nil
+		case "n":
+			if m.Tasks != nil {
+				m.taskInputOpen = true
+				m.taskInput.Focus()
+				return m, textinput.Blink
+			}
+		case "S":
+			if m.Tasks != nil && m.ActiveTask != nil {
+				return m, stopTaskCmd(m.Tasks)
+			}
 		case "r":
 			cmds = append(cmds, refreshCmd(m))
 		case "tab", "right", "l":
@@ -170,6 +252,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 	case tickMsg:
 		cmds = append(cmds, refreshCmd(m), tickCmd())
+	case taskActionMsg:
+		if msg.err != nil {
+			m.statusMsg = "task error: " + msg.err.Error()
+		} else {
+			m.statusMsg = msg.status
+		}
+		cmds = append(cmds, refreshCmd(m))
 	case refreshMsg:
 		m.Today = msg.today
 		m.Last7d = msg.last7d

@@ -66,7 +66,7 @@ func renderTasksTab(m Model) string {
 	sb.WriteString(headerStyle.Render("Tasks") + "  ")
 	sb.WriteString(dimStyle.Render(fmt.Sprintf("(%d)", len(m.AllTasks))) + "\n\n")
 	if len(m.AllTasks) == 0 {
-		sb.WriteString(dimStyle.Render("  no tasks yet — start one with `claudeops task start \"name\"`") + "\n")
+		sb.WriteString(dimStyle.Render("  no tasks yet — press `n` to start one (or use `claudeops task start \"name\"`)") + "\n")
 		return sb.String()
 	}
 	sb.WriteString(fmt.Sprintf("  %-30s  %-19s  %-12s  %8s  %12s\n",
