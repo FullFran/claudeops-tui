@@ -1,0 +1,49 @@
+# claudeops pricing seed.
+#
+# Prices are in EUR per 1,000,000 tokens, split into the four token classes
+# Anthropic charges separately. Edit this file as Anthropic updates pricing.
+#
+# Source: https://www.anthropic.com/pricing  (verify before trusting € numbers)
+# Currency: EUR.  Adjust if you want USD — the calculator does not convert.
+#
+# updated: 2026-04-08
+
+updated = "2026-04-08"
+currency = "EUR"
+
+[models."claude-opus-4-6"]
+input         = 13.80
+output        = 69.00
+cache_read    =  1.38
+cache_create  = 17.25
+
+[models."claude-sonnet-4-6"]
+input         =  2.76
+output        = 13.80
+cache_read    =  0.276
+cache_create  =  3.45
+
+[models."claude-haiku-4-5-20251001"]
+input         =  0.736
+output        =  3.68
+cache_read    =  0.0736
+cache_create  =  0.92
+
+# Aliases — Claude Code occasionally reports short model names.
+[models."claude-opus-4"]
+input         = 13.80
+output        = 69.00
+cache_read    =  1.38
+cache_create  = 17.25
+
+[models."claude-sonnet-4"]
+input         =  2.76
+output        = 13.80
+cache_read    =  0.276
+cache_create  =  3.45
+
+[models."claude-haiku-4-5"]
+input         =  0.736
+output        =  3.68
+cache_read    =  0.0736
+cache_create  =  0.92
