@@ -299,8 +299,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ActiveTask = msg.activeTask
 		m.refreshViewport()
 	}
-	// Forward unknown keys / scroll keys to the viewport for the scrollable tabs.
-	if m.activeTab != TabDashboard && m.ready {
+	// Forward unknown keys / scroll keys to the viewport for every tab.
+	if m.ready {
 		var vpCmd tea.Cmd
 		m.viewport, vpCmd = m.viewport.Update(msg)
 		if vpCmd != nil {
@@ -311,13 +311,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // refreshViewport regenerates the viewport content for the active tab.
-// Called whenever data or tab changes.
+// Called whenever data or tab changes. Every tab — including Dashboard —
+// renders into the viewport so content longer than the terminal scrolls.
 func (m *Model) refreshViewport() {
-	if !m.ready || m.activeTab == TabDashboard {
+	if !m.ready {
 		return
 	}
 	var content string
 	switch m.activeTab {
+	case TabDashboard:
+		content = renderDashboardTab(*m)
 	case TabSessions:
 		content = renderSessionsTab(*m)
 	case TabProjects:

@@ -27,16 +27,12 @@ func (m Model) View() string {
 	sb.WriteString(titleStyle.Render("claudeops") + " " + dimStyle.Render(m.Version) + "\n")
 	sb.WriteString(renderTabBar(m.activeTab) + "\n\n")
 
-	// Body
-	switch m.activeTab {
-	case TabDashboard:
-		sb.WriteString(renderDashboardTab(m))
-	default:
-		if m.ready {
-			sb.WriteString(m.viewport.View() + "\n")
-		} else {
-			sb.WriteString(dimStyle.Render("loading…") + "\n")
-		}
+	// Body — every tab renders through the viewport so content scrolls
+	// when the terminal is shorter than the rendered content.
+	if m.ready {
+		sb.WriteString(m.viewport.View() + "\n")
+	} else {
+		sb.WriteString(dimStyle.Render("loading…") + "\n")
 	}
 
 	// Modal: task input
