@@ -140,6 +140,54 @@ func TestRefreshOn401(t *testing.T) {
 	}
 }
 
+func TestSnapshotHandlesNullBuckets(t *testing.T) {
+	dir := t.TempDir()
+	credsPath := writeCreds(t, dir, validCreds(time.Now().Add(time.Hour)))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Real shape observed on a Sonnet-only Max plan: opus is null,
+		// sonnet is populated, plus the noisy null fields Anthropic returns.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"five_hour":{"utilization":17.0,"resets_at":"2026-04-08T17:00:00Z"},
+			"seven_day":{"utilization":34.0,"resets_at":"2026-04-13T17:00:00Z"},
+			"seven_day_oauth_apps":null,
+			"seven_day_opus":null,
+			"seven_day_sonnet":{"utilization":13.0,"resets_at":"2026-04-13T18:00:00Z"},
+			"seven_day_cowork":null,
+			"iguana_necktie":null,
+			"extra_usage":{"is_enabled":false,"monthly_limit":null,"used_credits":null,"utilization":null}
+		}`))
+	}))
+	defer srv.Close()
+
+	c := New(credsPath)
+	c.UsageURL = srv.URL
+	snap, err := c.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.FiveHour == nil || snap.FiveHour.Utilization != 17.0 {
+		t.Errorf("five_hour wrong: %+v", snap.FiveHour)
+	}
+	if snap.SevenDay == nil || snap.SevenDay.Utilization != 34.0 {
+		t.Errorf("seven_day wrong: %+v", snap.SevenDay)
+	}
+	if snap.SevenDayOpus != nil {
+		t.Errorf("seven_day_opus should be nil, got %+v", snap.SevenDayOpus)
+	}
+	if snap.SevenDaySonnet == nil || snap.SevenDaySonnet.Utilization != 13.0 {
+		t.Errorf("seven_day_sonnet wrong: %+v", snap.SevenDaySonnet)
+	}
+	pmb := snap.PerModelBuckets()
+	if len(pmb) != 1 || pmb[0].Label != "7d (sonnet)" {
+		t.Errorf("PerModelBuckets: want one sonnet entry, got %+v", pmb)
+	}
+	if snap.ExtraUsage == nil || snap.ExtraUsage.IsEnabled {
+		t.Errorf("extra_usage decoded wrong: %+v", snap.ExtraUsage)
+	}
+}
+
 func TestNoOAuthDegradesGracefully(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, ".credentials.json")

@@ -28,18 +28,53 @@ var ErrUsageUnavailable = errors.New("usage endpoint unavailable (no OAuth)")
 // ErrAuthExpired indicates refresh failed and the user must re-login.
 var ErrAuthExpired = errors.New("oauth refresh failed; run `claude /login`")
 
-// Bucket is one quota window.
+// Bucket is one quota window. Anthropic returns null for buckets that do
+// not apply to the current plan, so callers must check for nil.
 type Bucket struct {
 	Utilization float64   `json:"utilization"`
 	ResetsAt    time.Time `json:"resets_at"`
 }
 
+// ExtraUsage describes the optional pay-as-you-go credit pool.
+type ExtraUsage struct {
+	IsEnabled    bool     `json:"is_enabled"`
+	MonthlyLimit *float64 `json:"monthly_limit"`
+	UsedCredits  *float64 `json:"used_credits"`
+	Utilization  *float64 `json:"utilization"`
+}
+
 // Snapshot is the parsed response from the usage endpoint.
+//
+// The Anthropic OAuth /api/oauth/usage endpoint returns a struct of named
+// buckets, any of which may be null for plans that don't have that quota.
+// Per-model buckets (opus, sonnet, ...) are nil when the plan doesn't track
+// them separately.
 type Snapshot struct {
-	FiveHour     Bucket `json:"five_hour"`
-	SevenDay     Bucket `json:"seven_day"`
-	SevenDayOpus Bucket `json:"seven_day_opus"`
-	FetchedAt    time.Time
+	FiveHour       *Bucket     `json:"five_hour"`
+	SevenDay       *Bucket     `json:"seven_day"`
+	SevenDayOpus   *Bucket     `json:"seven_day_opus"`
+	SevenDaySonnet *Bucket     `json:"seven_day_sonnet"`
+	ExtraUsage     *ExtraUsage `json:"extra_usage"`
+	FetchedAt      time.Time
+}
+
+// PerModelBuckets returns the non-nil per-model 7-day buckets in display order.
+// Used by the TUI to render only the buckets that actually apply to the user.
+func (s Snapshot) PerModelBuckets() []NamedBucket {
+	out := []NamedBucket{}
+	if s.SevenDayOpus != nil {
+		out = append(out, NamedBucket{Label: "7d (opus)", Bucket: *s.SevenDayOpus})
+	}
+	if s.SevenDaySonnet != nil {
+		out = append(out, NamedBucket{Label: "7d (sonnet)", Bucket: *s.SevenDaySonnet})
+	}
+	return out
+}
+
+// NamedBucket pairs a Bucket with a display label.
+type NamedBucket struct {
+	Label  string
+	Bucket Bucket
 }
 
 // Client fetches usage data with caching and OAuth refresh.

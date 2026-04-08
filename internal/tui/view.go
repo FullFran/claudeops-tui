@@ -26,9 +26,16 @@ func (m Model) View() string {
 	if m.UsageErr != "" {
 		sb.WriteString(warnStyle.Render("  "+m.UsageErr) + "\n")
 	} else if m.Snap != nil {
-		sb.WriteString(renderBucket("  5h          ", m.Snap.FiveHour.Utilization, m.Snap.FiveHour.ResetsAt))
-		sb.WriteString(renderBucket("  7d          ", m.Snap.SevenDay.Utilization, m.Snap.SevenDay.ResetsAt))
-		sb.WriteString(renderBucket("  7d (opus)   ", m.Snap.SevenDayOpus.Utilization, m.Snap.SevenDayOpus.ResetsAt))
+		if m.Snap.FiveHour != nil {
+			sb.WriteString(renderBucket("  5h         ", m.Snap.FiveHour.Utilization, m.Snap.FiveHour.ResetsAt))
+		}
+		if m.Snap.SevenDay != nil {
+			sb.WriteString(renderBucket("  7d         ", m.Snap.SevenDay.Utilization, m.Snap.SevenDay.ResetsAt))
+		}
+		for _, nb := range m.Snap.PerModelBuckets() {
+			label := "  " + padRight(nb.Label, 11)
+			sb.WriteString(renderBucket(label, nb.Bucket.Utilization, nb.Bucket.ResetsAt))
+		}
 	} else {
 		sb.WriteString(dimStyle.Render("  —") + "\n")
 	}
@@ -84,12 +91,20 @@ func (m Model) View() string {
 }
 
 func renderBucket(label string, util float64, resets time.Time) string {
-	bar := bar(util, 30)
+	bar := bar(util, 24)
 	when := ""
 	if !resets.IsZero() {
-		when = fmt.Sprintf("  resets in %s", time.Until(resets).Truncate(time.Minute))
+		d := time.Until(resets).Truncate(time.Minute)
+		when = fmt.Sprintf("  resets in %s", d)
 	}
 	return fmt.Sprintf("%s %s %5.1f%%%s\n", label, bar, util, when)
+}
+
+func padRight(s string, n int) string {
+	if len(s) >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-len(s))
 }
 
 func bar(pct float64, width int) string {
