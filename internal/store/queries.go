@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -180,6 +181,71 @@ func (s *Store) TaskAggregates(ctx context.Context) ([]TaskAgg, error) {
 		out = append(out, ta)
 	}
 	return out, rows.Err()
+}
+
+// DailyAgg is the per-day rollup used by the sparkline, streak counter, and
+// (in a follow-up PR) the calendar tab.
+type DailyAgg struct {
+	Date     time.Time // local midnight of the day
+	CostEUR  float64
+	Events   int64
+	Sessions int64
+}
+
+// DailyAggregatesLocal returns one row per day for the last `days` days,
+// grouped in the user's LOCAL timezone (so a session that ran at 23:30 local
+// on Friday lands on Friday, not Saturday). Days with no activity are
+// included with zero values to make sparklines and streak math straightforward.
+//
+// The result is ordered oldest → newest, has exactly `days` entries, and the
+// last entry is always today (in local time).
+func (s *Store) DailyAggregatesLocal(ctx context.Context, days int) ([]DailyAgg, error) {
+	if days <= 0 {
+		return nil, nil
+	}
+	// SQLite computes date(ts, 'localtime') from the stored RFC3339 string.
+	// We aggregate, then merge with a generated date series client-side so
+	// empty days appear as zeros.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT date(ts, 'localtime')              AS day,
+		       COALESCE(SUM(cost_eur), 0)         AS cost,
+		       COUNT(*)                           AS events,
+		       COUNT(DISTINCT session_id)         AS sessions
+		FROM events
+		WHERE date(ts, 'localtime') >= date('now', 'localtime', ?)
+		GROUP BY day
+		ORDER BY day ASC`,
+		fmt.Sprintf("-%d days", days-1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byDay := make(map[string]DailyAgg, days)
+	for rows.Next() {
+		var dayStr string
+		var d DailyAgg
+		if err := rows.Scan(&dayStr, &d.CostEUR, &d.Events, &d.Sessions); err != nil {
+			return nil, err
+		}
+		byDay[dayStr] = d
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Build the contiguous local-day series oldest → newest.
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	out := make([]DailyAgg, 0, days)
+	for i := days - 1; i >= 0; i-- {
+		d := today.AddDate(0, 0, -i)
+		key := d.Format("2006-01-02")
+		da := byDay[key]
+		da.Date = d
+		out = append(out, da)
+	}
+	return out, nil
 }
 
 func startOfTodayUTC() time.Time {

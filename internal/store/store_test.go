@@ -206,3 +206,46 @@ func TestTaskUpsertAndAggregate(t *testing.T) {
 		t.Errorf("expected ended_at set")
 	}
 }
+
+func TestDailyAggregatesLocalReturnsContiguousSeries(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
+	twoDaysAgo := today.AddDate(0, 0, -2)
+
+	c1 := 1.5
+	c2 := 4.0
+	c3 := 2.25
+	_ = s.Insert(ctx, makeEvent("u1", "sA", "/p/x", "claude-opus-4-6", today), &c1, nil)
+	_ = s.Insert(ctx, makeEvent("u2", "sA", "/p/x", "claude-opus-4-6", today), &c2, nil)
+	_ = s.Insert(ctx, makeEvent("u3", "sB", "/p/x", "claude-opus-4-6", twoDaysAgo), &c3, nil)
+
+	rows, err := s.DailyAggregatesLocal(ctx, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 7 {
+		t.Fatalf("want 7 contiguous days, got %d", len(rows))
+	}
+	last := rows[len(rows)-1]
+	if last.CostEUR != 5.5 || last.Events != 2 || last.Sessions != 1 {
+		t.Errorf("today row wrong: %+v", last)
+	}
+	twoAgo := rows[len(rows)-3]
+	if twoAgo.CostEUR != 2.25 || twoAgo.Events != 1 {
+		t.Errorf("two-days-ago row wrong: %+v", twoAgo)
+	}
+	// Days with no activity must be present with zeros (sparkline needs them).
+	yesterday := rows[len(rows)-2]
+	if yesterday.CostEUR != 0 || yesterday.Events != 0 {
+		t.Errorf("empty day should be zero, got %+v", yesterday)
+	}
+	// Series must be sorted oldest → newest.
+	for i := 1; i < len(rows); i++ {
+		if !rows[i].Date.After(rows[i-1].Date) {
+			t.Errorf("series not strictly ascending at index %d", i)
+		}
+	}
+}

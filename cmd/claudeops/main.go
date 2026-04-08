@@ -67,6 +67,7 @@ Usage:
 Files:
   ~/.claudeops/claudeops.db        local SQLite store
   ~/.claudeops/pricing.toml        editable pricing table
+  ~/.claudeops/config.toml         dashboard widgets, thresholds, key bindings
   ~/.claudeops/current-task.json   sidecar for the active task
   ~/.claude/projects/              source data (read-only)`)
 }
@@ -101,6 +102,13 @@ func cmdTUI() error {
 	}
 	defer s.Close()
 
+	settings, err := config.LoadOrCreate(p.ConfigPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claudeops: config:", err)
+		// Fall back to defaults rather than refuse to start.
+		settings = config.DefaultSettings()
+	}
+
 	uClient := usage.New(p.ClaudeCreds)
 
 	// Embedded collector goroutine.
@@ -112,7 +120,7 @@ func cmdTUI() error {
 		_ = col.Watch(ctx)
 	}()
 
-	model := tui.New(s, uClient, tr, calc.Updated(), version)
+	model := tui.NewWithSettings(s, uClient, tr, settings, calc.Updated(), version)
 	prog := tea.NewProgram(model, tea.WithAltScreen())
 	_, err = prog.Run()
 	return err
