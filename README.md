@@ -13,24 +13,22 @@ Shows **real** subscription % from Anthropic's `/api/oauth/usage` endpoint — n
 - Tracks tasks via `claudeops task start "name"` and attributes events to them by `(sessionId, timestamp window)`
 - **Session drill-down** — navigate into any session to see per-model costs, hourly activity, token breakdown with cache hit ratio, and duration
 - **Daily drill-down** — browse daily aggregates with hourly charts and per-model breakdown
-- Renders one consolidated Bubbletea dashboard with 7 tabs
+- **Insights engine** — 5 computed insights: cache efficiency, model mix, cost trend, session efficiency, peak hours
+- **MCP server** — expose all data to Claude Code, opencode, or any MCP client for conversational analysis
+- Renders one consolidated Bubbletea dashboard with 8 tabs
 
 ## Architecture
 
 ```mermaid
 graph LR
     A["~/.claude/projects/*.jsonl"] -->|fsnotify + offsets| B[Collector]
-    B -->|parse + cost calc| C[(SQLite)]
+    B -->|parse + cost calc| C[(SQLite WAL)]
     D["Anthropic /api/oauth/usage"] -->|OAuth + 5min cache| E[Usage Client]
     C --> F[TUI Dashboard]
     E --> F
-    F --> G[Dashboard]
-    F --> H[Sessions]
-    F --> I[Projects]
-    F --> J[Models]
-    F --> K[Tasks]
-    F --> L[Calendar]
-    F --> M[Settings]
+    C -->|read-only| G[MCP Server]
+    G -->|stdio| H[Claude Code / opencode / Cursor]
+    F --> I["8 tabs: Dashboard, Sessions, Projects,\nModels, Tasks, Insights, Calendar, Settings"]
 ```
 
 ### Navigation flow
@@ -48,7 +46,7 @@ stateDiagram-v2
     SessionDetail --> SessionBrowse : esc
     SessionBrowse --> Normal : esc
 
-    Normal --> Normal : tab / 1-7 (switch tabs)
+    Normal --> Normal : tab / 1-8 (switch tabs)
 ```
 
 ## Install
@@ -91,6 +89,7 @@ CGO_ENABLED=0 go build -o claudeops ./cmd/claudeops
 
 ```bash
 claudeops                       # launch the TUI dashboard (default)
+claudeops mcp                   # start MCP server (stdio, for Claude Code / opencode)
 claudeops task start "refactor parser"
 claudeops task stop
 claudeops task list
@@ -104,7 +103,7 @@ Press `?` inside the TUI for the full keybinding reference. Highlights:
 
 | Key | Action |
 |-----|--------|
-| `1`–`7` | switch tab (Dashboard, Sessions, Projects, Models, Tasks, Calendar, Settings) |
+| `1`–`8` | switch tab (Dashboard, Sessions, Projects, Models, Tasks, Insights, Calendar, Settings) |
 | `enter` | browse daily breakdown (Dashboard) / browse sessions (Sessions) / drill into detail |
 | `j` / `k` | navigate lists (day browser, session browser, settings) |
 | `space` | toggle setting (Settings tab) |
@@ -123,6 +122,88 @@ From the **Sessions** tab, press `enter` to open the session browser. Use `j`/`k
 - **Token breakdown** — input, output, cache read, cache create
 - **Cache hit ratio** — how effectively the session used prompt caching
 - **Duration** — first to last event timestamps
+
+### Insights tab
+
+Press `6` to see computed insights about your usage patterns:
+
+| Insight | What it detects | Severity |
+|---------|----------------|----------|
+| **Cache Efficiency** | Low prompt cache reuse across sessions | Warn <20%, Tip 20-40% |
+| **Model Mix** | Over-reliance on a single (expensive) model | Tip if >70% on one model |
+| **Cost Trend** | Week-over-week spending changes | Warn if >50% increase |
+| **Session Efficiency** | Short sessions costing more per token (cold context rebuilds) | Tip if 2x+ more expensive |
+| **Peak Hours** | When you spend the most | Info (top 3 hours) |
+
+Each insight is toggleable in the Settings tab (`8`).
+
+### MCP server
+
+The MCP server exposes your usage data to **Claude Code**, **opencode**, **Cursor**, or any MCP-compatible client. This lets you ask questions about your usage conversationally:
+
+> *"What project am I spending the most on this week?"*
+> *"Am I using cache effectively?"*
+> *"Show me my daily cost trend for the last month"*
+
+```mermaid
+graph LR
+    subgraph "claudeops mcp (stdio)"
+        T1[claudeops_summary]
+        T2[claudeops_sessions]
+        T3[claudeops_session_detail]
+        T4[claudeops_projects]
+        T5[claudeops_models]
+        T6[claudeops_daily]
+        T7[claudeops_insights]
+    end
+    DB[(SQLite\nread-only)] --> T1 & T2 & T3 & T4 & T5 & T6 & T7
+    T1 & T2 & T3 & T4 & T5 & T6 & T7 --> C[Claude Code / opencode]
+```
+
+#### Activate
+
+```bash
+# Register the MCP server with Claude Code
+claude mcp add claudeops -- claudeops mcp
+```
+
+This tells Claude Code to launch `claudeops mcp` on demand. The server opens your SQLite database in **read-only mode** (safe to run alongside the TUI), answers queries via stdio, and exits when the connection closes. Zero background processes.
+
+#### Deactivate
+
+```bash
+# Remove it — no more context token cost
+claude mcp remove claudeops
+```
+
+When deactivated, the 7 tools disappear from Claude's context completely. **Activate it only when you want to analyze your usage**, then deactivate to save context tokens.
+
+#### Available tools
+
+| Tool | Description | Params |
+|------|-------------|--------|
+| `claudeops_summary` | Cost and token aggregates | `period`: today, 7d, 30d |
+| `claudeops_sessions` | Sessions ranked by cost | `limit`: 1-100 (default 20) |
+| `claudeops_session_detail` | Full session breakdown (models + hourly) | `session_id` (required) |
+| `claudeops_projects` | Projects ranked by cost | `limit`: 1-100 (default 20) |
+| `claudeops_models` | Per-model usage with cache ratios | none |
+| `claudeops_daily` | Daily cost/events trend | `days`: 1-90 (default 30) |
+| `claudeops_insights` | Computed insights from the Insights tab | none |
+
+#### For other MCP clients (opencode, Cursor, etc.)
+
+Add to your MCP config file:
+
+```json
+{
+  "mcpServers": {
+    "claudeops": {
+      "command": "claudeops",
+      "args": ["mcp"]
+    }
+  }
+}
+```
 
 ## Files
 
@@ -154,7 +235,15 @@ cache_ttl_seconds = 300     # how often to poll Anthropic's usage endpoint (defa
 
 [tabs]
 sessions = true             # toggle entire tabs on/off
+insights = true
 calendar = true
+
+[insights]
+show_cache_efficiency = true
+show_model_mix = true
+show_cost_trend = true
+show_session_efficiency = true
+show_peak_hours = true
 ```
 
 ## Roadmap
@@ -164,8 +253,8 @@ See [epic #9](https://github.com/FullFran/claudeops-tui/issues/9) for the work p
 ```mermaid
 graph TD
     P1["Phase 1: Session Drill-Down ✅"]
-    P2["Phase 2: Aggregate Insights"]
-    P3["Phase 3: MCP Server"]
+    P2["Phase 2: Aggregate Insights ✅"]
+    P3["Phase 3: MCP Server ✅"]
     P4["Phase 4: Active Logging"]
 
     P1 --> P2
@@ -173,20 +262,22 @@ graph TD
     P3 --> P4
 
     style P1 fill:#2d6a4f,color:#fff
+    style P2 fill:#2d6a4f,color:#fff
+    style P3 fill:#2d6a4f,color:#fff
 ```
 
 | Phase | Status | What |
 |-------|--------|------|
 | **1. Session Drill-Down** | Done | Navigate into sessions, see per-model costs, hourly charts, cache ratios |
-| **2. Aggregate Insights** | Planned | Cache efficiency scores, model mix analysis, cost trends |
-| **3. MCP Server** | Planned | Expose data via MCP so Claude can analyze your usage conversationally |
+| **2. Aggregate Insights** | Done | Cache efficiency, model mix, cost trend, session efficiency, peak hours |
+| **3. MCP Server** | Done | 7 tools via `claudeops mcp` for conversational usage analysis |
 | **4. Active Logging** | Planned | Intent tagging, outcome tracking, tool usage patterns |
 
 See also [`docs/plan.md`](./docs/plan.md) for the original scope and deferred Fase 2/3 work (daemon mode, alerts, multi-device sync).
 
 ## Status
 
-MVP with interactive drill-downs.
+MVP with interactive drill-downs, computed insights, and MCP server.
 
 ## Caveats
 
