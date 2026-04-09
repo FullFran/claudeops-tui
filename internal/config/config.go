@@ -22,6 +22,7 @@ type Settings struct {
 	Calendar    CalendarSettings    `toml:"calendar"`
 	Keybindings KeybindingsSettings `toml:"keybindings"`
 	Usage       UsageSettings       `toml:"usage"`
+	Insights    InsightsSettings    `toml:"insights"`
 }
 
 // UsageSettings controls how often the Anthropic usage endpoint is polled.
@@ -66,6 +67,16 @@ type TabSettings struct {
 	Projects bool `toml:"projects"`
 	Models   bool `toml:"models"`
 	Tasks    bool `toml:"tasks"`
+	Insights bool `toml:"insights"`
+}
+
+// InsightsSettings toggles individual insight cards on the Insights tab.
+type InsightsSettings struct {
+	ShowCacheEfficiency   bool `toml:"show_cache_efficiency"`
+	ShowModelMix          bool `toml:"show_model_mix"`
+	ShowCostTrend         bool `toml:"show_cost_trend"`
+	ShowSessionEfficiency bool `toml:"show_session_efficiency"`
+	ShowPeakHours         bool `toml:"show_peak_hours"`
 }
 
 // CalendarSettings configures the calendar tab (shipped in a follow-up PR).
@@ -111,6 +122,14 @@ func DefaultSettings() Settings {
 			Projects: true,
 			Models:   true,
 			Tasks:    true,
+			Insights: true,
+		},
+		Insights: InsightsSettings{
+			ShowCacheEfficiency:   true,
+			ShowModelMix:          true,
+			ShowCostTrend:         true,
+			ShowSessionEfficiency: true,
+			ShowPeakHours:         true,
 		},
 		Calendar: CalendarSettings{
 			DefaultView:  "grid",

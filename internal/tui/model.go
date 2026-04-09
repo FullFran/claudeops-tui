@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/insights"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
 	"github.com/fullfran/claudeops-tui/internal/usage"
@@ -28,20 +29,22 @@ type Model struct {
 	Version        string
 
 	// snapshot
-	Today        store.Aggregates
-	Last7d       store.Aggregates
-	TopSess      []store.SessionAgg
-	AllSess      []store.SessionAgg
-	TopProj      []store.ProjectAgg
-	AllProj      []store.ProjectAgg
-	PerModel     []store.ModelAgg
-	AllTasks     []store.TaskAgg
-	Daily        []store.DailyAgg     // last 30 days, local TZ
+	Today         store.Aggregates
+	Last7d        store.Aggregates
+	TopSess       []store.SessionAgg
+	AllSess       []store.SessionAgg
+	TopProj       []store.ProjectAgg
+	AllProj       []store.ProjectAgg
+	PerModel      []store.ModelAgg
+	AllTasks      []store.TaskAgg
+	Daily         []store.DailyAgg    // last 30 days, local TZ
 	PerModelToday []store.ModelAgg    // per-model breakdown for today only
-	BurnRate4h   float64              // €/hour over the last 4 hours
-	Snap         *usage.Snapshot
-	UsageErr     string
-	ActiveTask   *tasks.Task
+	BurnRate4h    float64             // €/hour over the last 4 hours
+	Snap          *usage.Snapshot
+	UsageErr      string
+	ActiveTask    *tasks.Task
+	HourlyGlobal  []store.HourlyAgg   // global per-hour aggregates for insights
+	Insights      []insights.Insight  // computed insights
 
 	// ui state
 	activeTab Tab
@@ -224,6 +227,8 @@ type refreshMsg struct {
 	snap          *usage.Snapshot
 	usageErr      string
 	activeTask    *tasks.Task
+	hourlyGlobal  []store.HourlyAgg
+	computedInsights []insights.Insight
 }
 
 func tickCmd() tea.Cmd {
@@ -254,6 +259,14 @@ func refreshCmd(m Model) tea.Cmd {
 			if a, err := m.Store.AggregatesSince(ctx, since4h); err == nil {
 				msg.burnRate4h = a.CostEUR / 4.0
 			}
+			msg.hourlyGlobal, _ = m.Store.GlobalHourlyAggregates(ctx, since7d)
+			msg.computedInsights = insights.Compute(insights.Input{
+				Last7d:       msg.last7d,
+				PerModel:     msg.perModel,
+				Daily:        msg.daily,
+				Sessions:     msg.allSess,
+				HourlyGlobal: msg.hourlyGlobal,
+			})
 		}
 		if m.Usage != nil && m.Settings.Dashboard.ShowSubscription {
 			snap, err := m.Usage.Get(ctx)
@@ -375,6 +388,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "6":
+			m.activeTab = TabInsights
+			m.viewMode = viewNormal
+			m.refreshViewport()
+		case "7":
 			m.activeTab = TabSettings
 			m.viewMode = viewNormal
 			m.settingsCursor = 1 // skip first section header
@@ -456,6 +473,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Snap = msg.snap
 		m.UsageErr = msg.usageErr
 		m.ActiveTask = msg.activeTask
+		m.HourlyGlobal = msg.hourlyGlobal
+		m.Insights = msg.computedInsights
 		m.refreshViewport()
 	}
 	// Forward unknown keys / scroll keys to the viewport for every tab.
@@ -602,6 +621,8 @@ func (m *Model) refreshViewport() {
 		content = renderModelsTab(*m)
 	case TabTasks:
 		content = renderTasksTab(*m)
+	case TabInsights:
+		content = renderInsightsTab(*m)
 	case TabSettings:
 		content = renderSettingsTab(*m)
 	}
