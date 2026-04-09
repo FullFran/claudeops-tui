@@ -190,9 +190,27 @@ When deactivated, the 7 tools disappear from Claude's context completely. **Acti
 | `claudeops_daily` | Daily cost/events trend | `days`: 1-90 (default 30) |
 | `claudeops_insights` | Computed insights from the Insights tab | none |
 
-#### For other MCP clients (opencode, Cursor, etc.)
+#### opencode
 
-Add to your MCP config file:
+Add to `~/.config/opencode/opencode.json` inside the `"mcp"` object:
+
+```json
+{
+  "mcp": {
+    "claudeops": {
+      "type": "local",
+      "command": ["claudeops", "mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Set `"enabled": false` to deactivate without removing the entry.
+
+#### Cursor / other MCP clients
+
+Add to your MCP config file (e.g. `~/.cursor/mcp.json`):
 
 ```json
 {
@@ -204,6 +222,8 @@ Add to your MCP config file:
   }
 }
 ```
+
+Remove the entry to deactivate.
 
 ## Files
 
