@@ -59,6 +59,23 @@ func (s *Store) migrate() error {
 	return err
 }
 
+// OpenReadOnly opens an existing SQLite file in read-only mode.
+// It does NOT run migrations and returns an error if the file does not exist.
+func OpenReadOnly(path string) (*Store, error) {
+	// Use immutable=1 for safer concurrent read-only access.
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)",
+		filepath.ToSlash(path))
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store.OpenReadOnly %s: %w", path, err)
+	}
+	return &Store{db: db}, nil
+}
+
 // Close releases the database handle.
 func (s *Store) Close() error { return s.db.Close() }
 

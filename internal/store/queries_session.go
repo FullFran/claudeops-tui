@@ -2,7 +2,44 @@ package store
 
 import (
 	"context"
+	"time"
 )
+
+// SessionAggByID returns the cost aggregate for a specific session_id.
+// Returns sql.ErrNoRows if the session does not exist.
+func (s *Store) SessionAggByID(ctx context.Context, sessionID string) (SessionAgg, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT e.session_id, p.name,
+		       COALESCE(SUM(e.cost_eur), 0) AS c,
+		       COUNT(e.uuid) AS events,
+		       COALESCE(SUM(e.in_tokens), 0),
+		       COALESCE(SUM(e.out_tokens), 0),
+		       COALESCE(SUM(e.cache_read_tokens), 0),
+		       COALESCE(SUM(e.cache_create_tokens), 0),
+		       MIN(e.ts),
+		       MAX(e.ts)
+		FROM events e
+		JOIN sessions s ON s.id = e.session_id
+		JOIN projects p ON p.id = s.project_id
+		WHERE e.session_id = ?
+		GROUP BY e.session_id, p.name`,
+		sessionID)
+
+	var sa SessionAgg
+	var firstStr, lastStr string
+	if err := row.Scan(&sa.SessionID, &sa.ProjectName, &sa.CostEUR,
+		&sa.Events, &sa.InTokens, &sa.OutTokens, &sa.CacheReadTokens, &sa.CacheCreateTokens,
+		&firstStr, &lastStr); err != nil {
+		return SessionAgg{}, err
+	}
+	if t, err := time.Parse(time.RFC3339Nano, firstStr); err == nil {
+		sa.FirstSeen = t
+	}
+	if t, err := time.Parse(time.RFC3339Nano, lastStr); err == nil {
+		sa.LastSeen = t
+	}
+	return sa, nil
+}
 
 // ModelsForSession returns per-model aggregates for a specific session.
 func (s *Store) ModelsForSession(ctx context.Context, sessionID string) ([]ModelAgg, error) {

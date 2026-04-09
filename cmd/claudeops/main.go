@@ -15,6 +15,7 @@ import (
 
 	"github.com/fullfran/claudeops-tui/internal/collector"
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/mcpserver"
 	"github.com/fullfran/claudeops-tui/internal/pricing"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
@@ -40,6 +41,8 @@ func run() error {
 	case "version", "-v", "--version":
 		fmt.Println("claudeops", version)
 		return nil
+	case "mcp":
+		return cmdMCP()
 	case "task":
 		return cmdTask(args[1:])
 	case "ingest":
@@ -62,6 +65,7 @@ Usage:
   claudeops task stop             stop the current task
   claudeops task list             list all tasks
   claudeops ingest                one-shot ingest of existing JSONL files
+  claudeops mcp                   start MCP server over stdio
   claudeops version               print version
 
 Files:
@@ -70,6 +74,20 @@ Files:
   ~/.claudeops/config.toml         dashboard widgets, thresholds, key bindings
   ~/.claudeops/current-task.json   sidecar for the active task
   ~/.claude/projects/              source data (read-only)`)
+}
+
+func cmdMCP() error {
+	p, err := config.Default()
+	if err != nil {
+		return err
+	}
+	s, err := store.OpenReadOnly(p.DBPath)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	srv := mcpserver.New(s)
+	return srv.Serve()
 }
 
 func openCore() (config.Paths, *store.Store, *pricing.Calculator, *tasks.Tracker, error) {
