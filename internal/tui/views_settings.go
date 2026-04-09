@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -103,7 +105,43 @@ func settingsItems() []settingsItem {
 		{label: "Peak hours", desc: "top 3 hours by spend",
 			get:    func(s config.Settings) bool { return s.Insights.ShowPeakHours },
 			toggle: func(s *config.Settings) { s.Insights.ShowPeakHours = !s.Insights.ShowPeakHours }},
+
+		{section: true, label: "MCP Server"},
+		{label: "Claude Code", desc: "expose usage data via MCP",
+			get: func(_ config.Settings) bool {
+				return mcpConfigExists("claudeops")
+			},
+			toggle: func(_ *config.Settings) {
+				toggleMCPConfig("claudeops", []byte(`{
+  "command": "claudeops",
+  "args": ["mcp"]
+}
+`))
+			}},
 	}
+}
+
+// mcpConfigPath returns ~/.claude/mcp/<name>.json.
+func mcpConfigPath(name string) string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude", "mcp", name+".json")
+}
+
+// mcpConfigExists checks whether the MCP server config file exists.
+func mcpConfigExists(name string) bool {
+	_, err := os.Stat(mcpConfigPath(name))
+	return err == nil
+}
+
+// toggleMCPConfig creates or removes the MCP server config file.
+func toggleMCPConfig(name string, content []byte) {
+	path := mcpConfigPath(name)
+	if mcpConfigExists(name) {
+		os.Remove(path)
+		return
+	}
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	os.WriteFile(path, content, 0o600)
 }
 
 var (
