@@ -18,9 +18,16 @@ type Aggregates struct {
 
 // SessionAgg is a per-session cost aggregate.
 type SessionAgg struct {
-	SessionID   string
-	ProjectName string
-	CostEUR     float64
+	SessionID         string
+	ProjectName       string
+	CostEUR           float64
+	Events            int64
+	InTokens          int64
+	OutTokens         int64
+	CacheReadTokens   int64
+	CacheCreateTokens int64
+	FirstSeen         time.Time
+	LastSeen          time.Time
 }
 
 // ProjectAgg is a per-project cost aggregate.
@@ -72,16 +79,30 @@ func (s *Store) aggregatesSince(ctx context.Context, since time.Time) (Aggregate
 
 // TopSessionsByCost returns the N highest-cost sessions for events since `since`.
 func (s *Store) TopSessionsByCost(ctx context.Context, n int, since time.Time) ([]SessionAgg, error) {
+	sinceStr := since.UTC().Format(time.RFC3339Nano)
+	// When since is the zero time, include all rows.
+	whereClause := "WHERE e.ts >= ?"
+	if since.IsZero() {
+		whereClause = "WHERE 1=1 OR e.ts >= ?"
+	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.session_id, p.name, COALESCE(SUM(e.cost_eur), 0) AS c
+		`SELECT e.session_id, p.name,
+		        COALESCE(SUM(e.cost_eur), 0) AS c,
+		        COUNT(e.uuid) AS events,
+		        COALESCE(SUM(e.in_tokens), 0),
+		        COALESCE(SUM(e.out_tokens), 0),
+		        COALESCE(SUM(e.cache_read_tokens), 0),
+		        COALESCE(SUM(e.cache_create_tokens), 0),
+		        MIN(e.ts),
+		        MAX(e.ts)
 		 FROM events e
 		 JOIN sessions s ON s.id = e.session_id
 		 JOIN projects p ON p.id = s.project_id
-		 WHERE e.ts >= ?
+		 `+whereClause+`
 		 GROUP BY e.session_id, p.name
 		 ORDER BY c DESC
 		 LIMIT ?`,
-		since.UTC().Format(time.RFC3339Nano), n)
+		sinceStr, n)
 	if err != nil {
 		return nil, err
 	}
@@ -89,8 +110,17 @@ func (s *Store) TopSessionsByCost(ctx context.Context, n int, since time.Time) (
 	var out []SessionAgg
 	for rows.Next() {
 		var sa SessionAgg
-		if err := rows.Scan(&sa.SessionID, &sa.ProjectName, &sa.CostEUR); err != nil {
+		var firstStr, lastStr string
+		if err := rows.Scan(&sa.SessionID, &sa.ProjectName, &sa.CostEUR,
+			&sa.Events, &sa.InTokens, &sa.OutTokens, &sa.CacheReadTokens, &sa.CacheCreateTokens,
+			&firstStr, &lastStr); err != nil {
 			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, firstStr); err == nil {
+			sa.FirstSeen = t
+		}
+		if t, err := time.Parse(time.RFC3339Nano, lastStr); err == nil {
+			sa.LastSeen = t
 		}
 		out = append(out, sa)
 	}

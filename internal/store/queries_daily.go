@@ -17,7 +17,15 @@ type HourlyAgg struct {
 func (s *Store) SessionsForDay(ctx context.Context, day time.Time) ([]SessionAgg, error) {
 	dayStr := day.Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT e.session_id, p.name, COALESCE(SUM(e.cost_eur), 0) AS c
+		SELECT e.session_id, p.name,
+		       COALESCE(SUM(e.cost_eur), 0) AS c,
+		       COUNT(e.uuid) AS events,
+		       COALESCE(SUM(e.in_tokens), 0),
+		       COALESCE(SUM(e.out_tokens), 0),
+		       COALESCE(SUM(e.cache_read_tokens), 0),
+		       COALESCE(SUM(e.cache_create_tokens), 0),
+		       MIN(e.ts),
+		       MAX(e.ts)
 		FROM events e
 		JOIN sessions s ON s.id = e.session_id
 		JOIN projects p ON p.id = s.project_id
@@ -32,8 +40,17 @@ func (s *Store) SessionsForDay(ctx context.Context, day time.Time) ([]SessionAgg
 	var out []SessionAgg
 	for rows.Next() {
 		var sa SessionAgg
-		if err := rows.Scan(&sa.SessionID, &sa.ProjectName, &sa.CostEUR); err != nil {
+		var firstStr, lastStr string
+		if err := rows.Scan(&sa.SessionID, &sa.ProjectName, &sa.CostEUR,
+			&sa.Events, &sa.InTokens, &sa.OutTokens, &sa.CacheReadTokens, &sa.CacheCreateTokens,
+			&firstStr, &lastStr); err != nil {
 			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, firstStr); err == nil {
+			sa.FirstSeen = t
+		}
+		if t, err := time.Parse(time.RFC3339Nano, lastStr); err == nil {
+			sa.LastSeen = t
 		}
 		out = append(out, sa)
 	}

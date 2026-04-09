@@ -400,6 +400,88 @@ func TestDayDetailRendersContent(t *testing.T) {
 	}
 }
 
+func TestSessionBrowseEnterAndEsc(t *testing.T) {
+	m := newTestModel(t)
+	ctx := context.Background()
+	cost := 2.0
+	ev := store.Event{
+		UUID: "u1", SessionID: "sess-browse-01", CWD: "/p/myproj", Type: "assistant",
+		Model: "claude-opus-4-6", TS: time.Now().UTC(),
+		InTokens: 10, OutTokens: 20, CacheReadTokens: 30, CacheCreateTokens: 40,
+	}
+	_ = m.Store.Insert(ctx, ev, &cost, nil)
+
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 50})
+	mm, _ = mm.Update(refreshCmd(mm.(Model))().(refreshMsg))
+
+	// Switch to Sessions tab.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if mm.(Model).activeTab != TabSessions {
+		t.Fatal("expected TabSessions")
+	}
+
+	// Press enter → session browser.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if mm.(Model).viewMode != viewSessionBrowse {
+		t.Fatalf("expected viewSessionBrowse, got %d", mm.(Model).viewMode)
+	}
+	out := mm.(Model).View()
+	if !strings.Contains(out, "Session list") {
+		t.Errorf("session browser should show 'Session list' breadcrumb:\n%s", out)
+	}
+
+	// Navigate with j/k.
+	startCursor := mm.(Model).sessCursor
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	// cursor was at 0 and list has 1 item, so j should stay clamped at 0.
+	_ = startCursor
+
+	// Press enter → session detail.
+	mm, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter in session browser should trigger loadSessionDetailCmd")
+	}
+	detailMsg := cmd()
+	mm, _ = mm.Update(detailMsg)
+	if mm.(Model).viewMode != viewSessionDetail {
+		t.Fatalf("expected viewSessionDetail, got %d", mm.(Model).viewMode)
+	}
+	out = mm.(Model).View()
+	if !strings.Contains(out, "sess-browse-01") {
+		t.Errorf("session detail should show session ID:\n%s", out)
+	}
+
+	// Esc → back to session browser.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if mm.(Model).viewMode != viewSessionBrowse {
+		t.Fatalf("esc should return to session browser, got %d", mm.(Model).viewMode)
+	}
+
+	// Esc → back to normal view.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if mm.(Model).viewMode != viewNormal {
+		t.Fatalf("second esc should return to viewNormal, got %d", mm.(Model).viewMode)
+	}
+}
+
+func TestSessionBrowseEmptyList(t *testing.T) {
+	m := newTestModel(t)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 50})
+	mm, _ = mm.Update(refreshCmd(mm.(Model))().(refreshMsg))
+
+	// Switch to Sessions tab — no data inserted.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if mm.(Model).activeTab != TabSessions {
+		t.Fatal("expected TabSessions")
+	}
+
+	// Press enter on empty sessions → should stay in viewNormal.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if mm.(Model).viewMode != viewNormal {
+		t.Fatalf("enter with empty sessions should stay viewNormal, got %d", mm.(Model).viewMode)
+	}
+}
+
 func TestSettingsCursorNavigation(t *testing.T) {
 	m := newTestModel(t)
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
