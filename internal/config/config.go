@@ -21,6 +21,14 @@ type Settings struct {
 	Tabs        TabSettings         `toml:"tabs"`
 	Calendar    CalendarSettings    `toml:"calendar"`
 	Keybindings KeybindingsSettings `toml:"keybindings"`
+	Usage       UsageSettings       `toml:"usage"`
+}
+
+// UsageSettings controls how often the Anthropic usage endpoint is polled.
+// The endpoint is undocumented and shared with Claude Code, so conservative
+// defaults help avoid HTTP 429 responses.
+type UsageSettings struct {
+	CacheTTLSeconds int `toml:"cache_ttl_seconds"`
 }
 
 // DashboardSettings toggles individual widgets on the main dashboard tab.
@@ -111,6 +119,9 @@ func DefaultSettings() Settings {
 		},
 		Keybindings: KeybindingsSettings{
 			CommandPalette: "ctrl+p",
+		},
+		Usage: UsageSettings{
+			CacheTTLSeconds: 300,
 		},
 	}
 }
