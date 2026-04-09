@@ -588,11 +588,13 @@ func (m *Model) refreshViewport() {
 	if !m.ready {
 		return
 	}
+	prevOffset := m.viewport.YOffset
 	var content string
 	// Drill-down views override normal tab rendering.
 	if m.viewMode == viewDayBrowse {
 		content = renderDayBrowse(*m)
 		m.viewport.SetContent(content)
+		m.scrollCursorIntoView(content, prevOffset)
 		return
 	}
 	if m.viewMode == viewDayDetail && m.dayDetail != nil {
@@ -603,6 +605,7 @@ func (m *Model) refreshViewport() {
 	if m.viewMode == viewSessionBrowse {
 		content = renderSessionBrowse(*m)
 		m.viewport.SetContent(content)
+		m.scrollCursorIntoView(content, prevOffset)
 		return
 	}
 	if m.viewMode == viewSessionDetail {
@@ -628,38 +631,43 @@ func (m *Model) refreshViewport() {
 	}
 	m.viewport.SetContent(content)
 	if m.activeTab == TabSettings {
-		m.scrollSettingsCursorIntoView()
+		m.scrollCursorIntoView(content, prevOffset)
 	}
 }
 
-// scrollSettingsCursorIntoView adjusts the viewport offset so the settings
-// cursor row is visible. Each section header takes 3 lines (blank + title +
-// separator), Thresholds adds 2 extra lines, and each regular item is 1 line.
-// The first 2 lines are the tab header ("Settings" + hint).
-func (m *Model) scrollSettingsCursorIntoView() {
-	items := settingsItems()
-	line := 3 // header + hint + blank line
-	for i, item := range items {
-		if item.section {
-			line++ // blank line before section
-			line++ // section title
-			line++ // separator
-			if item.label == "Thresholds" {
-				line += 2 // warning/alert values + edit hint
-			}
-			continue
-		}
-		if i == m.settingsCursor {
+// cursorLineMarker is an invisible zero-width space injected at the start of
+// cursor lines by render functions. Used to find the cursor line reliably
+// without false matches on breadcrumbs or other content.
+const cursorLineMarker = "\u200B"
+
+// scrollCursorIntoView finds the cursor line marker in the rendered content
+// and adjusts the viewport offset to keep that line visible. Works for all
+// views that inject cursorLineMarker (Settings, Day Browse, Session Browse).
+// prevOffset is the YOffset before SetContent was called.
+func (m *Model) scrollCursorIntoView(content string, prevOffset int) {
+	lines := strings.Split(content, "\n")
+	cursorLine := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, cursorLineMarker) {
+			cursorLine = i
 			break
 		}
-		line++
+	}
+	if cursorLine < 0 {
+		m.viewport.SetYOffset(prevOffset)
+		return
 	}
 	vpH := m.viewport.Height
-	if line < m.viewport.YOffset {
-		m.viewport.SetYOffset(line - 1)
-	} else if line >= m.viewport.YOffset+vpH {
-		m.viewport.SetYOffset(line - vpH + 2)
+	if cursorLine >= prevOffset && cursorLine < prevOffset+vpH {
+		m.viewport.SetYOffset(prevOffset)
+		return
 	}
+	// Scroll so cursor is near the top third of the viewport.
+	target := cursorLine - vpH/3
+	if target < 0 {
+		target = 0
+	}
+	m.viewport.SetYOffset(target)
 }
 
 // toggleSettingsItem flips the bool at settingsCursor and persists to disk.

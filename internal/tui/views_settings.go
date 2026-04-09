@@ -190,7 +190,7 @@ func renderSettingsTab(m Model) string {
 			// Highlighted row.
 			indicator := ">"
 			line := fmt.Sprintf(" %s %s  %-24s  %s", indicator, toggle, label, desc)
-			sb.WriteString(settingsCursorStyle.Render(line) + "\n")
+			sb.WriteString(cursorLineMarker + settingsCursorStyle.Render(line) + "\n")
 		} else {
 			sb.WriteString(fmt.Sprintf("   %s  %-24s  %s\n", toggle, label, desc))
 		}

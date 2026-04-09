@@ -85,7 +85,7 @@ func renderDayBrowse(m Model) string {
 		if i == m.dayCursor {
 			line := fmt.Sprintf(" > %-14s%s  %8d  %8d  %10s  %s",
 				dateLabel, todayTag, d.Events, d.Sessions, costStr, barStr)
-			sb.WriteString(daySelectedStyle.Render(line) + "\n")
+			sb.WriteString(cursorLineMarker + daySelectedStyle.Render(line) + "\n")
 		} else {
 			if d.Events == 0 {
 				// Dim empty days.
