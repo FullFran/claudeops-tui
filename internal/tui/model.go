@@ -23,6 +23,7 @@ type Model struct {
 	Usage          *usage.Client
 	Tasks          *tasks.Tracker
 	Settings       config.Settings
+	ConfigPath     string // path to config.toml for live saves
 	PricingUpdated string
 	Version        string
 
@@ -54,6 +55,32 @@ type Model struct {
 	taskInputOpen bool
 	showHelp      bool
 	statusMsg     string // transient feedback (e.g. "task started: foo")
+
+	// settings tab state
+	settingsCursor int // selected row in the settings list
+
+	// day drill-down state
+	viewMode   viewMode
+	dayCursor  int        // index into m.Daily
+	dayDetail  *DayDetail // loaded on drill-down
+}
+
+// viewMode tracks the drill-down level within a tab.
+type viewMode int
+
+const (
+	viewNormal    viewMode = iota
+	viewDayBrowse          // list of days with cursor
+	viewDayDetail          // single day breakdown
+)
+
+// DayDetail holds the loaded data for a single-day drill-down.
+type DayDetail struct {
+	Date     time.Time
+	Agg      store.DailyAgg
+	Sessions []store.SessionAgg
+	Models   []store.ModelAgg
+	Hourly   []store.HourlyAgg
 }
 
 // New constructs a Model. Settings defaults to DefaultSettings() so callers
@@ -91,6 +118,34 @@ type tickMsg struct{}
 type taskActionMsg struct {
 	status string
 	err    error
+}
+
+// dayDetailMsg is the result of loading drill-down data for a single day.
+type dayDetailMsg struct {
+	detail *DayDetail
+	err    error
+}
+
+func loadDayDetailCmd(s *store.Store, day time.Time, agg store.DailyAgg) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		d := &DayDetail{Date: day, Agg: agg}
+		var err error
+		d.Sessions, err = s.SessionsForDay(ctx, day)
+		if err != nil {
+			return dayDetailMsg{err: err}
+		}
+		d.Models, err = s.ModelsForDay(ctx, day)
+		if err != nil {
+			return dayDetailMsg{err: err}
+		}
+		d.Hourly, err = s.HourlyForDay(ctx, day)
+		if err != nil {
+			return dayDetailMsg{err: err}
+		}
+		return dayDetailMsg{detail: d}
+	}
 }
 
 func startTaskCmd(tr *tasks.Tracker, name string) tea.Cmd {
@@ -217,12 +272,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 			return m, nil
 		}
+		// Drill-down views intercept navigation keys before normal handling.
+		if m.viewMode != viewNormal {
+			return m.updateDrillDown(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "?":
 			m.showHelp = true
 			return m, nil
+		case "esc":
+			// No-op at top level.
 		case "n":
 			if m.Tasks != nil {
 				m.taskInputOpen = true
@@ -233,29 +294,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.Tasks != nil && m.ActiveTask != nil {
 				return m, stopTaskCmd(m.Tasks)
 			}
+		case "j", "down":
+			if m.activeTab == TabSettings {
+				m.moveSettingsCursor(1)
+				m.refreshViewport()
+				return m, nil
+			}
+		case "k", "up":
+			if m.activeTab == TabSettings {
+				m.moveSettingsCursor(-1)
+				m.refreshViewport()
+				return m, nil
+			}
 		case "r":
 			cmds = append(cmds, refreshCmd(m))
 		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % tabCount
+			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "shift+tab", "left", "h":
 			m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
+			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "1":
 			m.activeTab = TabDashboard
+			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "2":
 			m.activeTab = TabSessions
+			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "3":
 			m.activeTab = TabProjects
+			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "4":
 			m.activeTab = TabModels
+			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "5":
 			m.activeTab = TabTasks
+			m.viewMode = viewNormal
 			m.refreshViewport()
+		case "6":
+			m.activeTab = TabSettings
+			m.viewMode = viewNormal
+			m.settingsCursor = 1 // skip first section header
+			m.refreshViewport()
+		case " ":
+			if m.activeTab == TabSettings {
+				m.toggleSettingsItem()
+				m.refreshViewport()
+			}
+		case "enter":
+			if m.activeTab == TabSettings {
+				m.toggleSettingsItem()
+				m.refreshViewport()
+			} else if m.activeTab == TabDashboard && len(m.Daily) > 0 {
+				m.viewMode = viewDayBrowse
+				m.dayCursor = len(m.Daily) - 1 // start on today
+				m.refreshViewport()
+			}
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -275,6 +374,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 	case tickMsg:
 		cmds = append(cmds, refreshCmd(m), tickCmd())
+	case dayDetailMsg:
+		if msg.err != nil {
+			m.statusMsg = "day detail: " + msg.err.Error()
+			m.viewMode = viewDayBrowse
+		} else {
+			m.dayDetail = msg.detail
+			m.viewMode = viewDayDetail
+		}
+		m.refreshViewport()
 	case taskActionMsg:
 		if msg.err != nil {
 			m.statusMsg = "task error: " + msg.err.Error()
@@ -310,6 +418,68 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// moveSettingsCursor moves the cursor by delta, skipping section headers.
+func (m *Model) moveSettingsCursor(delta int) {
+	items := settingsItems()
+	m.settingsCursor += delta
+	for m.settingsCursor >= 0 && m.settingsCursor < len(items) && items[m.settingsCursor].section {
+		m.settingsCursor += delta
+	}
+	if m.settingsCursor < 0 {
+		m.settingsCursor = 0
+		for m.settingsCursor < len(items) && items[m.settingsCursor].section {
+			m.settingsCursor++
+		}
+	}
+	if m.settingsCursor >= len(items) {
+		m.settingsCursor = len(items) - 1
+	}
+}
+
+// updateDrillDown handles keys when in day browse or day detail mode.
+func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.viewMode {
+	case viewDayBrowse:
+		switch msg.String() {
+		case "esc", "q":
+			m.viewMode = viewNormal
+			m.refreshViewport()
+			return m, nil
+		case "j", "down":
+			// List renders newest-first, so down = older = lower index.
+			if m.dayCursor > 0 {
+				m.dayCursor--
+			}
+			m.refreshViewport()
+			return m, nil
+		case "k", "up":
+			// Up = newer = higher index.
+			if m.dayCursor < len(m.Daily)-1 {
+				m.dayCursor++
+			}
+			m.refreshViewport()
+			return m, nil
+		case "enter":
+			if m.dayCursor >= 0 && m.dayCursor < len(m.Daily) && m.Store != nil {
+				day := m.Daily[m.dayCursor]
+				return m, loadDayDetailCmd(m.Store, day.Date, day)
+			}
+		}
+	case viewDayDetail:
+		switch msg.String() {
+		case "esc", "q":
+			m.viewMode = viewDayBrowse
+			m.dayDetail = nil
+			m.refreshViewport()
+			return m, nil
+		}
+	}
+	// Forward scroll keys to viewport.
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+	return m, vpCmd
+}
+
 // refreshViewport regenerates the viewport content for the active tab.
 // Called whenever data or tab changes. Every tab — including Dashboard —
 // renders into the viewport so content longer than the terminal scrolls.
@@ -318,6 +488,17 @@ func (m *Model) refreshViewport() {
 		return
 	}
 	var content string
+	// Drill-down views override normal tab rendering.
+	if m.viewMode == viewDayBrowse {
+		content = renderDayBrowse(*m)
+		m.viewport.SetContent(content)
+		return
+	}
+	if m.viewMode == viewDayDetail && m.dayDetail != nil {
+		content = renderDayDetail(*m)
+		m.viewport.SetContent(content)
+		return
+	}
 	switch m.activeTab {
 	case TabDashboard:
 		content = renderDashboardTab(*m)
@@ -329,6 +510,28 @@ func (m *Model) refreshViewport() {
 		content = renderModelsTab(*m)
 	case TabTasks:
 		content = renderTasksTab(*m)
+	case TabSettings:
+		content = renderSettingsTab(*m)
 	}
 	m.viewport.SetContent(content)
+}
+
+// toggleSettingsItem flips the bool at settingsCursor and persists to disk.
+func (m *Model) toggleSettingsItem() {
+	items := settingsItems()
+	if m.settingsCursor < 0 || m.settingsCursor >= len(items) {
+		return
+	}
+	item := items[m.settingsCursor]
+	if item.section {
+		return
+	}
+	item.toggle(&m.Settings)
+	if m.ConfigPath != "" {
+		if err := config.Save(m.ConfigPath, m.Settings); err != nil {
+			m.statusMsg = "config save: " + err.Error()
+		} else {
+			m.statusMsg = "saved config.toml"
+		}
+	}
 }

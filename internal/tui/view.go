@@ -47,8 +47,8 @@ func (m Model) View() string {
 		sb.WriteString("\n" + warnStyle.Render(m.statusMsg))
 	}
 
-	// Footer
-	hints := "1-5 tabs · tab/⇄ · ↑↓ scroll · n new task · S stop task · r refresh · ? help · q quit"
+	// Footer — context-sensitive hints per view mode.
+	hints := contextHints(m)
 	footer := dimStyle.Render(fmt.Sprintf("pricing updated: %s   %s", m.PricingUpdated, hints))
 	sb.WriteString("\n" + footer)
 
@@ -59,22 +59,70 @@ func (m Model) View() string {
 func renderHelp(m Model) string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("claudeops — keybindings") + "\n\n")
-	rows := [][2]string{
-		{"1-5", "switch to tab N"},
+	sb.WriteString(dimStyle.Render("  Navigation") + "\n")
+	for _, r := range [][2]string{
+		{"1-6", "switch to tab N"},
 		{"tab / shift+tab", "cycle tabs forward / back"},
 		{"← → h l", "cycle tabs"},
-		{"↑ ↓", "scroll active tab"},
-		{"r", "force refresh"},
+		{"↑ ↓ j k", "scroll content / navigate lists"},
+		{"q / ctrl+c", "quit"},
+	} {
+		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
+	}
+
+	sb.WriteString("\n" + dimStyle.Render("  Dashboard") + "\n")
+	for _, r := range [][2]string{
+		{"enter", "open daily breakdown (browse 30 days)"},
+		{"r", "force refresh data"},
+	} {
+		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
+	}
+
+	sb.WriteString("\n" + dimStyle.Render("  Daily breakdown") + "\n")
+	for _, r := range [][2]string{
+		{"j / k", "select day (newer / older)"},
+		{"enter", "drill into day detail"},
+		{"esc", "go back"},
+	} {
+		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
+	}
+
+	sb.WriteString("\n" + dimStyle.Render("  Settings tab") + "\n")
+	for _, r := range [][2]string{
+		{"j / k", "move cursor"},
+		{"space / enter", "toggle on/off (auto-saved)"},
+	} {
+		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
+	}
+
+	sb.WriteString("\n" + dimStyle.Render("  Tasks") + "\n")
+	for _, r := range [][2]string{
 		{"n", "new task (opens input)"},
 		{"S", "stop active task"},
-		{"?", "toggle this help"},
-		{"q / ctrl+c", "quit"},
-	}
-	for _, r := range rows {
+	} {
 		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
 	}
 	sb.WriteString("\n" + dimStyle.Render("press any key to dismiss"))
 	return sb.String()
+}
+
+// contextHints returns the footer hint string appropriate to the current view.
+func contextHints(m Model) string {
+	switch m.viewMode {
+	case viewDayBrowse:
+		return "j/k move · enter detail · esc back · ? help"
+	case viewDayDetail:
+		return "esc back to list · ? help"
+	}
+	switch m.activeTab {
+	case TabSettings:
+		return "j/k move · space toggle · esc back · ? help"
+	case TabDashboard:
+		if len(m.Daily) > 0 {
+			return "1-6 tabs · enter browse days · n task · r refresh · ? help · q quit"
+		}
+	}
+	return "1-6 tabs · n task · S stop · r refresh · ? help · q quit"
 }
 
 // padRight pads a string with spaces on the right to width n.

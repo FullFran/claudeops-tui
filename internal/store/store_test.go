@@ -249,3 +249,62 @@ func TestDailyAggregatesLocalReturnsContiguousSeries(t *testing.T) {
 		}
 	}
 }
+
+func TestDayDrillDownQueries(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 10, 30, 0, 0, now.Location())
+
+	cost1 := 1.5
+	ev1 := makeEvent("d1", "s1", "/p/alpha", "claude-opus-4-6", today)
+	if err := s.Insert(ctx, ev1, &cost1, nil); err != nil {
+		t.Fatal(err)
+	}
+	cost2 := 2.0
+	ev2 := makeEvent("d2", "s2", "/p/beta", "claude-sonnet-4-6", today.Add(2*time.Hour))
+	if err := s.Insert(ctx, ev2, &cost2, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	todayDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	// SessionsForDay
+	sess, err := s.SessionsForDay(ctx, todayDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(sess))
+	}
+	// Highest cost first.
+	if sess[0].CostEUR < sess[1].CostEUR {
+		t.Error("sessions should be ordered by cost desc")
+	}
+
+	// ModelsForDay
+	models, err := s.ModelsForDay(ctx, todayDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+
+	// HourlyForDay
+	hourly, err := s.HourlyForDay(ctx, todayDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hourly) == 0 {
+		t.Fatal("expected at least 1 hourly entry")
+	}
+	// Should have entries for hour 10 and hour 12.
+	hours := make(map[int]bool)
+	for _, h := range hourly {
+		hours[h.Hour] = true
+	}
+	if !hours[10] || !hours[12] {
+		t.Errorf("expected hours 10 and 12, got %v", hours)
+	}
+}
