@@ -53,7 +53,7 @@ func renderSessionBrowse(m Model) string {
 
 		if i == m.sessCursor {
 			line := fmt.Sprintf(" > %-18s  %-26s  %8d  %12s", id, proj, s.Events, costStr)
-			sb.WriteString(daySelectedStyle.Render(line) + "\n")
+			sb.WriteString(cursorLineMarker + daySelectedStyle.Render(line) + "\n")
 		} else if s.CostEUR == 0 {
 			sb.WriteString(dimStyle.Render(fmt.Sprintf("   %-18s  %-26s  %8d  %12s",
 				id, proj, s.Events, costStr)) + "\n")
