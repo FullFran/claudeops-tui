@@ -217,7 +217,7 @@ func refreshCmd(m Model) tea.Cmd {
 				msg.burnRate4h = a.CostEUR / 4.0
 			}
 		}
-		if m.Usage != nil {
+		if m.Usage != nil && m.Settings.Dashboard.ShowSubscription {
 			snap, err := m.Usage.Get(ctx)
 			if err != nil {
 				if errors.Is(err, usage.ErrUsageUnavailable) {

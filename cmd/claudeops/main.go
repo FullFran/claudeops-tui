@@ -110,6 +110,9 @@ func cmdTUI() error {
 	}
 
 	uClient := usage.New(p.ClaudeCreds)
+	if settings.Usage.CacheTTLSeconds > 0 {
+		uClient.CacheTTL = time.Duration(settings.Usage.CacheTTLSeconds) * time.Second
+	}
 
 	// Embedded collector goroutine.
 	col := collector.New(p.ClaudeProjects, s, calc, tr)

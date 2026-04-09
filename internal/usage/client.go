@@ -116,7 +116,7 @@ func New(credsPath string) *Client {
 		UserAgent:  "claudeops/0.1",
 		CredsPath:  credsPath,
 		HTTP:           &http.Client{Timeout: 10 * time.Second},
-		CacheTTL:       60 * time.Second,
+		CacheTTL:       5 * time.Minute,
 		DefaultBackoff: 5 * time.Minute,
 	}
 }
