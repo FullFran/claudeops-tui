@@ -251,7 +251,7 @@ func TestAllTabsRenderWithoutPanic(t *testing.T) {
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 50})
 	mm, _ = mm.Update(refreshCmd(mm.(Model))().(refreshMsg))
 
-	for _, tab := range []Tab{TabDashboard, TabSessions, TabProjects, TabModels, TabTasks} {
+	for _, tab := range []Tab{TabDashboard, TabSessions, TabProjects, TabModels, TabTasks, TabSettings} {
 		mm2, _ := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune('1' + int(tab))}})
 		out := mm2.(Model).View()
 		if !strings.Contains(out, tab.String()) {
@@ -260,5 +260,161 @@ func TestAllTabsRenderWithoutPanic(t *testing.T) {
 		if strings.Contains(out, "panic") {
 			t.Errorf("tab %s: panic in view", tab)
 		}
+	}
+}
+
+func TestSettingsTabRendersWidgets(t *testing.T) {
+	m := newTestModel(t)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	// Switch to Settings tab.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	out := mm.(Model).View()
+
+	for _, want := range []string{"Settings", "Dashboard Widgets", "Subscription usage", "Visible Tabs", "Thresholds"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in settings view\n--\n%s", want, out)
+		}
+	}
+}
+
+func TestSettingsToggle(t *testing.T) {
+	m := newTestModel(t)
+	// Set up a temp config path for persistence test.
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	m.ConfigPath = cfgPath
+
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	// Switch to Settings tab — cursor starts at 1 (first toggleable item).
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	if mm.(Model).settingsCursor != 1 {
+		t.Fatalf("cursor should start at 1, got %d", mm.(Model).settingsCursor)
+	}
+	// First toggleable item is ShowSubscription, which defaults to true.
+	if !mm.(Model).Settings.Dashboard.ShowSubscription {
+		t.Fatal("ShowSubscription should default to true")
+	}
+	// Toggle it off with space.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	if mm.(Model).Settings.Dashboard.ShowSubscription {
+		t.Fatal("ShowSubscription should be false after toggle")
+	}
+	// Toggle it back on with enter.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !mm.(Model).Settings.Dashboard.ShowSubscription {
+		t.Fatal("ShowSubscription should be true after second toggle")
+	}
+	// Config was saved to disk.
+	saved, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Dashboard.ShowSubscription {
+		t.Error("saved config should have ShowSubscription = true")
+	}
+}
+
+func TestDayBrowseEnterAndEsc(t *testing.T) {
+	m := newTestModel(t)
+	ctx := context.Background()
+	cost := 2.0
+	ev := store.Event{
+		UUID: "u1", SessionID: "s1", CWD: "/p/alpha", Type: "assistant",
+		Model: "claude-opus-4-6", TS: time.Now().UTC(),
+		InTokens: 10, OutTokens: 20, CacheReadTokens: 30, CacheCreateTokens: 40,
+	}
+	_ = m.Store.Insert(ctx, ev, &cost, nil)
+
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 50})
+	mm, _ = mm.Update(refreshCmd(mm.(Model))().(refreshMsg))
+
+	// Press enter on Dashboard → day browser.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if mm.(Model).viewMode != viewDayBrowse {
+		t.Fatalf("expected viewDayBrowse, got %d", mm.(Model).viewMode)
+	}
+	out := mm.(Model).View()
+	if !strings.Contains(out, "Daily breakdown") {
+		t.Errorf("day browser should show header:\n%s", out)
+	}
+
+	// Navigate with j/k. List is newest-first, so j=down=older (lower index),
+	// k=up=newer (higher index).
+	startCursor := mm.(Model).dayCursor
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if mm.(Model).dayCursor >= startCursor {
+		t.Error("j should move cursor down (towards older days = lower index)")
+	}
+
+	// Press enter → day detail.
+	cursor := mm.(Model).dayCursor
+	mm, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter in day browser should trigger loadDayDetailCmd")
+	}
+	// Execute the command.
+	detailMsg := cmd()
+	mm, _ = mm.Update(detailMsg)
+	if mm.(Model).viewMode != viewDayDetail {
+		t.Fatalf("expected viewDayDetail, got %d", mm.(Model).viewMode)
+	}
+	_ = cursor
+
+	// Esc → back to day browser.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if mm.(Model).viewMode != viewDayBrowse {
+		t.Fatalf("esc should return to day browser, got %d", mm.(Model).viewMode)
+	}
+
+	// Esc again → back to normal Dashboard.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if mm.(Model).viewMode != viewNormal {
+		t.Fatalf("second esc should return to normal, got %d", mm.(Model).viewMode)
+	}
+}
+
+func TestDayDetailRendersContent(t *testing.T) {
+	m := newTestModel(t)
+	ctx := context.Background()
+	cost := 3.5
+	ev := store.Event{
+		UUID: "u1", SessionID: "s1", CWD: "/p/myproject", Type: "assistant",
+		Model: "claude-sonnet-4-6", TS: time.Now().UTC(),
+		InTokens: 100, OutTokens: 200, CacheReadTokens: 300, CacheCreateTokens: 400,
+	}
+	_ = m.Store.Insert(ctx, ev, &cost, nil)
+
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 60})
+	mm, _ = mm.Update(refreshCmd(mm.(Model))().(refreshMsg))
+
+	// Enter day browser → enter today's detail.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	detailMsg := cmd()
+	mm, _ = mm.Update(detailMsg)
+
+	out := mm.(Model).View()
+	for _, want := range []string{"Hourly activity", "Models", "Sessions", "€3.5", "myproject"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in day detail view\n--\n%s", want, out)
+		}
+	}
+}
+
+func TestSettingsCursorNavigation(t *testing.T) {
+	m := newTestModel(t)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+
+	start := mm.(Model).settingsCursor
+	// Move down.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if mm.(Model).settingsCursor <= start {
+		t.Error("j should move cursor down")
+	}
+	pos := mm.(Model).settingsCursor
+	// Move up.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if mm.(Model).settingsCursor >= pos {
+		t.Error("k should move cursor up")
 	}
 }

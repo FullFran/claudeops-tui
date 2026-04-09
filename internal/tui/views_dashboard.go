@@ -79,8 +79,9 @@ func renderDashboardTab(m Model) string {
 		for _, x := range series {
 			total += x.CostEUR
 		}
-		sb.WriteString("  " + dimStyle.Render(fmt.Sprintf("%s … %s   total: €%.2f   avg: €%.2f/d",
-			first, last, total, total/float64(len(series)))) + "\n\n")
+		sb.WriteString("  " + dimStyle.Render(fmt.Sprintf("%s … %s   total: €%.2f   avg: €%.2f/d   ",
+			first, last, total, total/float64(len(series)))) +
+			dimStyle.Render("enter: browse days") + "\n\n")
 	}
 
 	if d.ShowBurnRate && m.BurnRate4h > 0 {

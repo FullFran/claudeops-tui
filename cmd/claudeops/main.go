@@ -121,6 +121,7 @@ func cmdTUI() error {
 	}()
 
 	model := tui.NewWithSettings(s, uClient, tr, settings, calc.Updated(), version)
+	model.ConfigPath = p.ConfigPath
 	prog := tea.NewProgram(model, tea.WithAltScreen())
 	_, err = prog.Run()
 	return err
