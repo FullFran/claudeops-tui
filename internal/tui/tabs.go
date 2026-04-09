@@ -15,6 +15,7 @@ const (
 	TabProjects
 	TabModels
 	TabTasks
+	TabInsights
 	TabSettings
 )
 
@@ -30,13 +31,15 @@ func (t Tab) String() string {
 		return "Models"
 	case TabTasks:
 		return "Tasks"
+	case TabInsights:
+		return "Insights"
 	case TabSettings:
 		return "Settings"
 	}
 	return "?"
 }
 
-const tabCount = 6
+const tabCount = 7
 
 var (
 	tabActive   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("12")).Padding(0, 1)

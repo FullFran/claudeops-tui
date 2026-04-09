@@ -267,7 +267,7 @@ func TestSettingsTabRendersWidgets(t *testing.T) {
 	m := newTestModel(t)
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
 	// Switch to Settings tab.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
 	out := mm.(Model).View()
 
 	for _, want := range []string{"Settings", "Dashboard Widgets", "Subscription usage", "Visible Tabs", "Thresholds"} {
@@ -285,7 +285,7 @@ func TestSettingsToggle(t *testing.T) {
 
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
 	// Switch to Settings tab — cursor starts at 1 (first toggleable item).
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
 	if mm.(Model).settingsCursor != 1 {
 		t.Fatalf("cursor should start at 1, got %d", mm.(Model).settingsCursor)
 	}
@@ -485,7 +485,7 @@ func TestSessionBrowseEmptyList(t *testing.T) {
 func TestSettingsCursorNavigation(t *testing.T) {
 	m := newTestModel(t)
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'6'}})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'7'}})
 
 	start := mm.(Model).settingsCursor
 	// Move down.

@@ -83,6 +83,26 @@ func settingsItems() []settingsItem {
 		{label: "Tasks", desc: "task history with costs",
 			get:    func(s config.Settings) bool { return s.Tabs.Tasks },
 			toggle: func(s *config.Settings) { s.Tabs.Tasks = !s.Tabs.Tasks }},
+		{label: "Insights", desc: "actionable usage observations",
+			get:    func(s config.Settings) bool { return s.Tabs.Insights },
+			toggle: func(s *config.Settings) { s.Tabs.Insights = !s.Tabs.Insights }},
+
+		{section: true, label: "Insights Cards"},
+		{label: "Cache efficiency", desc: "cache reuse ratio insight",
+			get:    func(s config.Settings) bool { return s.Insights.ShowCacheEfficiency },
+			toggle: func(s *config.Settings) { s.Insights.ShowCacheEfficiency = !s.Insights.ShowCacheEfficiency }},
+		{label: "Model mix", desc: "spend concentration by model",
+			get:    func(s config.Settings) bool { return s.Insights.ShowModelMix },
+			toggle: func(s *config.Settings) { s.Insights.ShowModelMix = !s.Insights.ShowModelMix }},
+		{label: "Cost trend", desc: "week-over-week cost delta",
+			get:    func(s config.Settings) bool { return s.Insights.ShowCostTrend },
+			toggle: func(s *config.Settings) { s.Insights.ShowCostTrend = !s.Insights.ShowCostTrend }},
+		{label: "Session efficiency", desc: "short vs long session cost/token",
+			get:    func(s config.Settings) bool { return s.Insights.ShowSessionEfficiency },
+			toggle: func(s *config.Settings) { s.Insights.ShowSessionEfficiency = !s.Insights.ShowSessionEfficiency }},
+		{label: "Peak hours", desc: "top 3 hours by spend",
+			get:    func(s config.Settings) bool { return s.Insights.ShowPeakHours },
+			toggle: func(s *config.Settings) { s.Insights.ShowPeakHours = !s.Insights.ShowPeakHours }},
 	}
 }
 
