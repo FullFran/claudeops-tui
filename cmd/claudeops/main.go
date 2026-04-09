@@ -1,5 +1,5 @@
 // Command claudeops is the entrypoint. With no subcommand it launches the
-// TUI dashboard. Subcommands are: task start|stop|list, ingest, version.
+// TUI dashboard. Subcommands are: task start|stop|list, ingest, update, version.
 package main
 
 import (
@@ -32,8 +32,18 @@ func main() {
 	}
 }
 
+var (
+	runMCPCommand    = cmdMCP
+	runTaskCommand   = cmdTask
+	runIngestCommand = cmdIngest
+	runUpdateCommand = cmdUpdate
+)
+
 func run() error {
-	args := os.Args[1:]
+	return runArgs(os.Args[1:])
+}
+
+func runArgs(args []string) error {
 	if len(args) == 0 {
 		return cmdTUI()
 	}
@@ -42,11 +52,13 @@ func run() error {
 		fmt.Println("claudeops", version)
 		return nil
 	case "mcp":
-		return cmdMCP()
+		return runMCPCommand()
 	case "task":
-		return cmdTask(args[1:])
+		return runTaskCommand(args[1:])
 	case "ingest":
-		return cmdIngest()
+		return runIngestCommand()
+	case "update":
+		return runUpdateCommand()
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -65,6 +77,7 @@ Usage:
   claudeops task stop             stop the current task
   claudeops task list             list all tasks
   claudeops ingest                one-shot ingest of existing JSONL files
+  claudeops update                update the installed CLI
   claudeops mcp                   start MCP server over stdio
   claudeops version               print version
 

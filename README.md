@@ -57,7 +57,15 @@ go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
 
 ### Update
 
-Same command — `@latest` always pulls the newest version:
+Preferred path when `claudeops` was installed with `go install`:
+
+```bash
+claudeops update
+```
+
+If automatic update is not safe for your installation, the command fails with a clear reason and prints the manual command.
+
+Manual update remains:
 
 ```bash
 go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
@@ -94,6 +102,7 @@ claudeops task start "refactor parser"
 claudeops task stop
 claudeops task list
 claudeops ingest                # one-shot ingest of existing JSONL
+claudeops update                # update the installed CLI when safe
 claudeops version
 ```
 
