@@ -63,15 +63,21 @@ type Model struct {
 	viewMode   viewMode
 	dayCursor  int        // index into m.Daily
 	dayDetail  *DayDetail // loaded on drill-down
+
+	// session drill-down state
+	sessCursor  int           // index into m.AllSess
+	sessDetail  *SessionDetail // loaded on drill-down
 }
 
 // viewMode tracks the drill-down level within a tab.
 type viewMode int
 
 const (
-	viewNormal    viewMode = iota
-	viewDayBrowse          // list of days with cursor
-	viewDayDetail          // single day breakdown
+	viewNormal         viewMode = iota
+	viewDayBrowse               // list of days with cursor
+	viewDayDetail               // single day breakdown
+	viewSessionBrowse           // list of sessions with cursor
+	viewSessionDetail           // single session breakdown
 )
 
 // DayDetail holds the loaded data for a single-day drill-down.
@@ -81,6 +87,38 @@ type DayDetail struct {
 	Sessions []store.SessionAgg
 	Models   []store.ModelAgg
 	Hourly   []store.HourlyAgg
+}
+
+// SessionDetail holds the loaded data for a single-session drill-down.
+type SessionDetail struct {
+	SessionID string
+	Agg       store.SessionAgg
+	Models    []store.ModelAgg
+	Hourly    []store.HourlyAgg
+}
+
+// sessionDetailMsg is the result of loading drill-down data for a single session.
+type sessionDetailMsg struct {
+	detail *SessionDetail
+	err    error
+}
+
+func loadSessionDetailCmd(s *store.Store, sess store.SessionAgg) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		d := &SessionDetail{SessionID: sess.SessionID, Agg: sess}
+		var err error
+		d.Models, err = s.ModelsForSession(ctx, sess.SessionID)
+		if err != nil {
+			return sessionDetailMsg{err: err}
+		}
+		d.Hourly, err = s.HourlyForSession(ctx, sess.SessionID)
+		if err != nil {
+			return sessionDetailMsg{err: err}
+		}
+		return sessionDetailMsg{detail: d}
+	}
 }
 
 // New constructs a Model. Settings defaults to DefaultSettings() so callers
@@ -354,6 +392,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewMode = viewDayBrowse
 				m.dayCursor = len(m.Daily) - 1 // start on today
 				m.refreshViewport()
+			} else if m.activeTab == TabSessions && len(m.AllSess) > 0 {
+				m.viewMode = viewSessionBrowse
+				m.sessCursor = 0
+				m.refreshViewport()
 			}
 		}
 	case tea.WindowSizeMsg:
@@ -381,6 +423,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.dayDetail = msg.detail
 			m.viewMode = viewDayDetail
+		}
+		m.refreshViewport()
+	case sessionDetailMsg:
+		if msg.err != nil {
+			m.statusMsg = "session detail: " + msg.err.Error()
+			m.viewMode = viewSessionBrowse
+		} else {
+			m.sessDetail = msg.detail
+			m.viewMode = viewSessionDetail
 		}
 		m.refreshViewport()
 	case taskActionMsg:
@@ -473,6 +524,37 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			return m, nil
 		}
+	case viewSessionBrowse:
+		switch msg.String() {
+		case "esc", "q":
+			m.viewMode = viewNormal
+			m.refreshViewport()
+			return m, nil
+		case "j", "down":
+			if m.sessCursor < len(m.AllSess)-1 {
+				m.sessCursor++
+			}
+			m.refreshViewport()
+			return m, nil
+		case "k", "up":
+			if m.sessCursor > 0 {
+				m.sessCursor--
+			}
+			m.refreshViewport()
+			return m, nil
+		case "enter":
+			if m.sessCursor >= 0 && m.sessCursor < len(m.AllSess) && m.Store != nil {
+				return m, loadSessionDetailCmd(m.Store, m.AllSess[m.sessCursor])
+			}
+		}
+	case viewSessionDetail:
+		switch msg.String() {
+		case "esc", "q":
+			m.viewMode = viewSessionBrowse
+			m.sessDetail = nil
+			m.refreshViewport()
+			return m, nil
+		}
 	}
 	// Forward scroll keys to viewport.
 	var vpCmd tea.Cmd
@@ -496,6 +578,16 @@ func (m *Model) refreshViewport() {
 	}
 	if m.viewMode == viewDayDetail && m.dayDetail != nil {
 		content = renderDayDetail(*m)
+		m.viewport.SetContent(content)
+		return
+	}
+	if m.viewMode == viewSessionBrowse {
+		content = renderSessionBrowse(*m)
+		m.viewport.SetContent(content)
+		return
+	}
+	if m.viewMode == viewSessionDetail {
+		content = renderSessionDetail(*m)
 		m.viewport.SetContent(content)
 		return
 	}

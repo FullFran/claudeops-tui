@@ -87,6 +87,16 @@ func renderHelp(m Model) string {
 		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
 	}
 
+	sb.WriteString("\n" + dimStyle.Render("  Sessions") + "\n")
+	for _, r := range [][2]string{
+		{"enter", "open session browser"},
+		{"j / k", "select session (down / up)"},
+		{"enter (in list)", "drill into session detail"},
+		{"esc", "go back"},
+	} {
+		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
+	}
+
 	sb.WriteString("\n" + dimStyle.Render("  Settings tab") + "\n")
 	for _, r := range [][2]string{
 		{"j / k", "move cursor"},
@@ -113,6 +123,10 @@ func contextHints(m Model) string {
 		return "j/k move · enter detail · esc back · ? help"
 	case viewDayDetail:
 		return "esc back to list · ? help"
+	case viewSessionBrowse:
+		return "j/k move · enter detail · esc back · ? help"
+	case viewSessionDetail:
+		return "esc back to list · ? help"
 	}
 	switch m.activeTab {
 	case TabSettings:
@@ -120,6 +134,10 @@ func contextHints(m Model) string {
 	case TabDashboard:
 		if len(m.Daily) > 0 {
 			return "1-6 tabs · enter browse days · n task · r refresh · ? help · q quit"
+		}
+	case TabSessions:
+		if len(m.AllSess) > 0 {
+			return "1-6 tabs · enter browse · n task · r refresh · ? help · q quit"
 		}
 	}
 	return "1-6 tabs · n task · S stop · r refresh · ? help · q quit"
