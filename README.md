@@ -19,6 +19,14 @@ Shows **real** subscription % from Anthropic's `/api/oauth/usage` endpoint — n
 go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
 ```
 
+### Update
+
+Same command — `@latest` always pulls the newest version:
+
+```bash
+go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
+```
+
 If `claudeops` is still "command not found" after installation, your Go bin directory is probably not on `PATH` yet:
 
 ```bash
@@ -52,7 +60,21 @@ claudeops ingest                # one-shot ingest of existing JSONL
 claudeops version
 ```
 
-Quit the TUI with `q` or `Ctrl+C`. Press `r` to force-refresh.
+### Keyboard shortcuts
+
+Press `?` inside the TUI for the full keybinding reference. Highlights:
+
+| Key | Action |
+|-----|--------|
+| `1`–`6` | switch tab (Dashboard, Sessions, Projects, Models, Tasks, Settings) |
+| `enter` | browse daily breakdown (Dashboard) / drill into day detail |
+| `j` / `k` | navigate lists (day browser, settings) |
+| `space` | toggle setting (Settings tab) |
+| `esc` | go back one level |
+| `n` / `S` | new task / stop task |
+| `r` | force refresh |
+| `?` | help overlay |
+| `q` | quit |
 
 ## Files
 
@@ -60,6 +82,7 @@ Quit the TUI with `q` or `Ctrl+C`. Press `r` to force-refresh.
 |---|---|
 | `~/.claudeops/claudeops.db` | local SQLite store (WAL mode) |
 | `~/.claudeops/pricing.toml` | editable price table (seed shipped, edit when Anthropic changes prices) |
+| `~/.claudeops/config.toml` | dashboard widgets, thresholds, tab visibility (auto-created on first run) |
 | `~/.claudeops/current-task.json` | sidecar for the active task |
 | `~/.claude/projects/*.jsonl` | source data — read only |
 | `~/.claude/.credentials.json` | OAuth tokens — read always, written only during token refresh, atomic + flock + 0600 |
