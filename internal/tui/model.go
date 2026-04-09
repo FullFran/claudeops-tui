@@ -29,22 +29,26 @@ type Model struct {
 	Version        string
 
 	// snapshot
-	Today         store.Aggregates
-	Last7d        store.Aggregates
-	TopSess       []store.SessionAgg
-	AllSess       []store.SessionAgg
-	TopProj       []store.ProjectAgg
-	AllProj       []store.ProjectAgg
-	PerModel      []store.ModelAgg
-	AllTasks      []store.TaskAgg
-	Daily         []store.DailyAgg    // last 30 days, local TZ
-	PerModelToday []store.ModelAgg    // per-model breakdown for today only
-	BurnRate4h    float64             // €/hour over the last 4 hours
-	Snap          *usage.Snapshot
-	UsageErr      string
-	ActiveTask    *tasks.Task
-	HourlyGlobal  []store.HourlyAgg   // global per-hour aggregates for insights
-	Insights      []insights.Insight  // computed insights
+	Today                store.Aggregates
+	Last7d               store.Aggregates
+	TopSess              []store.SessionAgg
+	AllSess              []store.SessionAgg
+	TopProj              []store.ProjectAgg
+	AllProj              []store.ProjectAgg
+	PerModel             []store.ModelAgg
+	AllTasks             []store.TaskAgg
+	Daily                []store.DailyAgg // last 30 days, local TZ
+	PerModelToday        []store.ModelAgg // per-model breakdown for today only
+	BurnRate4h           float64          // €/hour over the last 4 hours
+	Snap                 *usage.Snapshot
+	UsageErr             string
+	WeeklyCycleLocal     store.Aggregates
+	WeeklyCycleStart     time.Time
+	WeeklyCycleEnd       time.Time
+	HasWeeklyCycleWindow bool
+	ActiveTask           *tasks.Task
+	HourlyGlobal         []store.HourlyAgg  // global per-hour aggregates for insights
+	Insights             []insights.Insight // computed insights
 
 	// ui state
 	activeTab Tab
@@ -63,24 +67,24 @@ type Model struct {
 	settingsCursor int // selected row in the settings list
 
 	// day drill-down state
-	viewMode   viewMode
-	dayCursor  int        // index into m.Daily
-	dayDetail  *DayDetail // loaded on drill-down
+	viewMode  viewMode
+	dayCursor int        // index into m.Daily
+	dayDetail *DayDetail // loaded on drill-down
 
 	// session drill-down state
-	sessCursor  int           // index into m.AllSess
-	sessDetail  *SessionDetail // loaded on drill-down
+	sessCursor int            // index into m.AllSess
+	sessDetail *SessionDetail // loaded on drill-down
 }
 
 // viewMode tracks the drill-down level within a tab.
 type viewMode int
 
 const (
-	viewNormal         viewMode = iota
-	viewDayBrowse               // list of days with cursor
-	viewDayDetail               // single day breakdown
-	viewSessionBrowse           // list of sessions with cursor
-	viewSessionDetail           // single session breakdown
+	viewNormal        viewMode = iota
+	viewDayBrowse              // list of days with cursor
+	viewDayDetail              // single day breakdown
+	viewSessionBrowse          // list of sessions with cursor
+	viewSessionDetail          // single session breakdown
 )
 
 // DayDetail holds the loaded data for a single-day drill-down.
@@ -213,22 +217,45 @@ func stopTaskCmd(tr *tasks.Tracker) tea.Cmd {
 }
 
 type refreshMsg struct {
-	today         store.Aggregates
-	last7d        store.Aggregates
-	topSess       []store.SessionAgg
-	allSess       []store.SessionAgg
-	topProj       []store.ProjectAgg
-	allProj       []store.ProjectAgg
-	perModel      []store.ModelAgg
-	allTasks      []store.TaskAgg
-	daily         []store.DailyAgg
-	perModelToday []store.ModelAgg
-	burnRate4h    float64
-	snap          *usage.Snapshot
-	usageErr      string
-	activeTask    *tasks.Task
-	hourlyGlobal  []store.HourlyAgg
-	computedInsights []insights.Insight
+	today                store.Aggregates
+	last7d               store.Aggregates
+	topSess              []store.SessionAgg
+	allSess              []store.SessionAgg
+	topProj              []store.ProjectAgg
+	allProj              []store.ProjectAgg
+	perModel             []store.ModelAgg
+	allTasks             []store.TaskAgg
+	daily                []store.DailyAgg
+	perModelToday        []store.ModelAgg
+	burnRate4h           float64
+	snap                 *usage.Snapshot
+	usageErr             string
+	weeklyCycleLocal     store.Aggregates
+	weeklyCycleStart     time.Time
+	weeklyCycleEnd       time.Time
+	hasWeeklyCycleWindow bool
+	activeTask           *tasks.Task
+	hourlyGlobal         []store.HourlyAgg
+	computedInsights     []insights.Insight
+}
+
+func currentSevenDayCycleWindow(snap *usage.Snapshot) (time.Time, time.Time, bool) {
+	if snap == nil || snap.SevenDay == nil || snap.SevenDay.ResetsAt.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+	end := snap.SevenDay.ResetsAt.UTC()
+	start := end.Add(-7 * 24 * time.Hour)
+	if snap.FetchedAt.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+	asOf := snap.FetchedAt.UTC()
+	if !asOf.After(start) {
+		return time.Time{}, time.Time{}, false
+	}
+	if asOf.After(end) {
+		asOf = end
+	}
+	return start, asOf, true
 }
 
 func tickCmd() tea.Cmd {
@@ -280,6 +307,16 @@ func refreshCmd(m Model) tea.Cmd {
 				}
 			} else {
 				msg.snap = &snap
+				if m.Store != nil {
+					if from, to, ok := currentSevenDayCycleWindow(&snap); ok {
+						if agg, err := m.Store.AggregatesBetween(ctx, from, to); err == nil {
+							msg.weeklyCycleLocal = agg
+							msg.weeklyCycleStart = from
+							msg.weeklyCycleEnd = snap.SevenDay.ResetsAt.UTC()
+							msg.hasWeeklyCycleWindow = true
+						}
+					}
+				}
 			}
 		}
 		if m.Tasks != nil {
@@ -472,6 +509,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.BurnRate4h = msg.burnRate4h
 		m.Snap = msg.snap
 		m.UsageErr = msg.usageErr
+		m.WeeklyCycleLocal = msg.weeklyCycleLocal
+		m.WeeklyCycleStart = msg.weeklyCycleStart
+		m.WeeklyCycleEnd = msg.weeklyCycleEnd
+		m.HasWeeklyCycleWindow = msg.hasWeeklyCycleWindow
 		m.ActiveTask = msg.activeTask
 		m.HourlyGlobal = msg.hourlyGlobal
 		m.Insights = msg.computedInsights

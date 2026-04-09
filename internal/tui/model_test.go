@@ -13,6 +13,7 @@ import (
 	"github.com/fullfran/claudeops-tui/internal/pricing"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
+	"github.com/fullfran/claudeops-tui/internal/usage"
 )
 
 func newTestModel(t *testing.T) Model {
@@ -74,6 +75,81 @@ func TestDashboardWithDataShowsNumbers(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in view\n--\n%s", want, out)
 		}
+	}
+}
+
+func TestCurrentSevenDayCycleWindowUsesSnapshotBoundaries(t *testing.T) {
+	resetAt := time.Date(2026, 4, 14, 16, 0, 0, 0, time.UTC)
+	fetchedAt := time.Date(2026, 4, 9, 12, 34, 56, 0, time.UTC)
+	snap := &usage.Snapshot{
+		SevenDay:  &usage.Bucket{ResetsAt: resetAt},
+		FetchedAt: fetchedAt,
+	}
+
+	from, to, ok := currentSevenDayCycleWindow(snap)
+	if !ok {
+		t.Fatal("expected real cycle window from snapshot")
+	}
+	if !from.Equal(resetAt.Add(-7 * 24 * time.Hour)) {
+		t.Fatalf("unexpected start: %s", from)
+	}
+	if !to.Equal(fetchedAt) {
+		t.Fatalf("unexpected as-of end: %s", to)
+	}
+}
+
+func TestDashboardRendersRealLocalWeeklyCycleSpend(t *testing.T) {
+	m := newTestModel(t)
+	ctx := context.Background()
+	resetAt := time.Date(2026, 4, 14, 16, 0, 0, 0, time.UTC)
+	cycleStart := resetAt.Add(-7 * 24 * time.Hour)
+
+	items := []struct {
+		uuid string
+		ts   time.Time
+		cost float64
+	}{
+		{uuid: "before", ts: cycleStart.Add(-time.Minute), cost: 1.0},
+		{uuid: "inside-1", ts: cycleStart.Add(time.Hour), cost: 2.0},
+		{uuid: "inside-2", ts: cycleStart.Add(24 * time.Hour), cost: 3.5},
+		{uuid: "after-snapshot", ts: time.Date(2026, 4, 9, 14, 0, 0, 0, time.UTC), cost: 9.0},
+	}
+	for _, it := range items {
+		cost := it.cost
+		ev := store.Event{
+			UUID: it.uuid, SessionID: "sess-weekly", CWD: "/p/alpha",
+			Type: "assistant", Model: "claude-opus-4-6", TS: it.ts,
+			InTokens: 5, OutTokens: 10,
+		}
+		if err := m.Store.Insert(ctx, ev, &cost, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m.Snap = &usage.Snapshot{
+		SevenDay:  &usage.Bucket{Utilization: 35, ResetsAt: resetAt},
+		FetchedAt: time.Date(2026, 4, 9, 13, 0, 0, 0, time.UTC),
+	}
+	m.WeeklyCycleStart, m.WeeklyCycleEnd, m.HasWeeklyCycleWindow = cycleStart, resetAt, true
+	agg, err := m.Store.AggregatesBetween(ctx, cycleStart, m.Snap.FetchedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.WeeklyCycleLocal = agg
+
+	out := renderDashboardTab(m)
+	for _, want := range []string{
+		"Subscription usage",
+		"This device · current weekly cycle",
+		"events: 2",
+		"€5.5000",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in dashboard\n--\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "€9.0000") {
+		t.Fatalf("dashboard included event outside snapshot as-of window\n--\n%s", out)
 	}
 }
 

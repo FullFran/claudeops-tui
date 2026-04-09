@@ -178,6 +178,41 @@ func TestAggregatesAndTopQueries(t *testing.T) {
 	}
 }
 
+func TestAggregatesBetweenUsesHalfOpenWindow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+
+	items := []struct {
+		uuid string
+		ts   time.Time
+		cost float64
+	}{
+		{uuid: "before", ts: base.Add(-time.Minute), cost: 1.0},
+		{uuid: "start", ts: base, cost: 2.0},
+		{uuid: "inside", ts: base.Add(time.Hour), cost: 3.0},
+		{uuid: "end", ts: base.Add(2 * time.Hour), cost: 4.0},
+	}
+	for _, it := range items {
+		cost := it.cost
+		ev := makeEvent(it.uuid, "sess-window", "/p/window", "claude-opus-4-6", it.ts)
+		if err := s.Insert(ctx, ev, &cost, nil); err != nil {
+			t.Fatalf("Insert %s: %v", it.uuid, err)
+		}
+	}
+
+	agg, err := s.AggregatesBetween(ctx, base, base.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.Events != 2 {
+		t.Fatalf("want 2 events in [from,to), got %d", agg.Events)
+	}
+	if agg.CostEUR < 4.99 || agg.CostEUR > 5.01 {
+		t.Fatalf("want ~5.0 cost in [from,to), got %.4f", agg.CostEUR)
+	}
+}
+
 func TestTaskUpsertAndAggregate(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

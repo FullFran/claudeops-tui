@@ -60,6 +60,25 @@ func (s *Store) AggregatesSince(ctx context.Context, since time.Time) (Aggregate
 	return s.aggregatesSince(ctx, since)
 }
 
+// AggregatesBetween returns totals for events with from <= ts < to.
+func (s *Store) AggregatesBetween(ctx context.Context, from, to time.Time) (Aggregates, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT
+		    COUNT(*),
+		    COALESCE(SUM(in_tokens), 0),
+		    COALESCE(SUM(out_tokens), 0),
+		    COALESCE(SUM(cache_read_tokens), 0),
+		    COALESCE(SUM(cache_create_tokens), 0),
+		    COALESCE(SUM(cost_eur), 0)
+		 FROM events
+		 WHERE ts >= ? AND ts < ?`,
+		from.UTC().Format(time.RFC3339Nano),
+		to.UTC().Format(time.RFC3339Nano))
+	var a Aggregates
+	err := row.Scan(&a.Events, &a.InTokens, &a.OutTokens, &a.CacheReadTokens, &a.CacheCreateTokens, &a.CostEUR)
+	return a, err
+}
+
 func (s *Store) aggregatesSince(ctx context.Context, since time.Time) (Aggregates, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT

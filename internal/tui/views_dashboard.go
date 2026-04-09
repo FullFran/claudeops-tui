@@ -32,6 +32,17 @@ func renderDashboardTab(m Model) string {
 				label := "  " + padRight(nb.Label, 11)
 				sb.WriteString(renderBucket(label, nb.Bucket.Utilization, nb.Bucket.ResetsAt))
 			}
+			sb.WriteString("\n")
+			sb.WriteString(dimStyle.Render("  This device · current weekly cycle") + "\n")
+			if m.HasWeeklyCycleWindow {
+				costStyled := colorForSpend(m.WeeklyCycleLocal.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.4f", m.WeeklyCycleLocal.CostEUR))
+				sb.WriteString(fmt.Sprintf("  events: %d   %s\n", m.WeeklyCycleLocal.Events, costStyled))
+				sb.WriteString("  " + dimStyle.Render(fmt.Sprintf("window: %s -> %s",
+					m.WeeklyCycleStart.Local().Format("2006-01-02 15:04"),
+					m.WeeklyCycleEnd.Local().Format("2006-01-02 15:04"))) + "\n")
+			} else {
+				sb.WriteString(dimStyle.Render("  unavailable (weekly cycle window not present in usage snapshot)") + "\n")
+			}
 		} else {
 			sb.WriteString(dimStyle.Render("  —") + "\n")
 		}
