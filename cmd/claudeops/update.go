@@ -13,9 +13,9 @@ func cmdUpdate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	decision, err := selfupdate.New(version).Update(ctx)
+	fmt.Printf("claudeops current version: %s\n", version)
 
-	fmt.Printf("claudeops current version: %s\n", decision.CurrentVersion)
+	decision, err := selfupdate.New(version).Update(ctx)
 	if decision.ExecutablePath != "" {
 		fmt.Printf("installed at: %s\n", decision.ExecutablePath)
 	}
@@ -38,6 +38,8 @@ func cmdUpdate() error {
 		}
 		fmt.Println("manual update:")
 		fmt.Printf("  %s\n", decision.InstallCommand)
+		fmt.Println("if `@latest` still resolves to an older commit, retry with:")
+		fmt.Printf("  GOPROXY=direct %s\n", decision.InstallCommand)
 		fmt.Println("if `claudeops` is not on PATH afterwards, add `$(go env GOPATH)/bin` or your `GOBIN` to PATH")
 	}
 

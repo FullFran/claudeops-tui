@@ -71,6 +71,12 @@ Manual update remains:
 go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
 ```
 
+If the Go proxy is still serving the previous commit for a few minutes, retry with:
+
+```bash
+GOPROXY=direct go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
+```
+
 If `claudeops` is still "command not found" after installation, your Go bin directory is probably not on `PATH` yet:
 
 ```bash

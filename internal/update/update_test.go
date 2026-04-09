@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -98,6 +99,27 @@ func TestDecideAutoWhenExecutableMatchesGoBin(t *testing.T) {
 	}
 }
 
+func TestDecideAutoWhenExecutableMatchesGopathBin(t *testing.T) {
+	runner := &fakeRunner{
+		execPath: "/tmp/go/bin/claudeops",
+		goPath:   "/usr/bin/go",
+		goEnv: Env{
+			GOPATH: "/tmp/go",
+		},
+	}
+
+	decision, err := New("0.1.0").withRunner(runner).Decide(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.CanAuto {
+		t.Fatalf("expected automatic update, got manual: %s", decision.Reason)
+	}
+	if decision.ExpectedPath != "/tmp/go/bin/claudeops" {
+		t.Fatalf("unexpected expected path: %s", decision.ExpectedPath)
+	}
+}
+
 func TestDecideManualWhenExecutableIsOutsideGoBin(t *testing.T) {
 	runner := &fakeRunner{
 		execPath: "/usr/local/bin/claudeops",
@@ -177,6 +199,30 @@ func TestUpdateReturnsManualErrorWhenUnsafe(t *testing.T) {
 	_, err := New("0.1.0").withRunner(runner).Update(context.Background())
 	if !errors.Is(err, ErrManual) {
 		t.Fatalf("expected ErrManual, got %v", err)
+	}
+}
+
+func TestParseGoEnvJSONHandlesEmptyGobin(t *testing.T) {
+	out := []byte("{\n\t\"GOBIN\": \"\",\n\t\"GOPATH\": \"/home/franblakia/go\"\n}\n")
+	env, err := parseGoEnvJSON(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.GOBIN != "" {
+		t.Fatalf("expected empty GOBIN, got %q", env.GOBIN)
+	}
+	if env.GOPATH != "/home/franblakia/go" {
+		t.Fatalf("unexpected GOPATH: %q", env.GOPATH)
+	}
+	if got := expectedBinaryPath(env, "claudeops"); got != "/home/franblakia/go/bin/claudeops" {
+		t.Fatalf("unexpected expected path: %s", got)
+	}
+}
+
+func TestParseGoEnvJSONRejectsInvalidJSON(t *testing.T) {
+	_, err := parseGoEnvJSON(bytes.TrimSpace([]byte("not-json")))
+	if err == nil {
+		t.Fatal("expected parse error")
 	}
 }
 

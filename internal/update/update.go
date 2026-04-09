@@ -1,4 +1,3 @@
-// Package update implements a conservative self-update flow for claudeops.
 package update
 
 import (
@@ -14,22 +13,11 @@ import (
 
 const InstallTarget = "github.com/fullfran/claudeops-tui/cmd/claudeops@latest"
 
-var ErrManual = errors.New("automatic update is not available for this installation")
+var ErrManual = errors.New("manual update required")
 
 type Env struct {
 	GOBIN  string
 	GOPATH string
-}
-
-type Decision struct {
-	CanAuto        bool
-	Reason         string
-	ExecutablePath string
-	ExpectedPath   string
-	InstallCommand string
-	CurrentVersion string
-	InstalledCheck string
-	InstalledNow   string
 }
 
 type Runner interface {
@@ -49,21 +37,27 @@ func (OSRunner) LookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
-func (r OSRunner) GoEnv(ctx context.Context) (Env, error) {
-	out, err := r.Run(ctx, "go", "env", "-json", "GOBIN", "GOPATH")
+func (OSRunner) GoEnv(ctx context.Context) (Env, error) {
+	cmd := exec.CommandContext(ctx, "go", "env", "-json", "GOBIN", "GOPATH")
+	out, err := cmd.Output()
 	if err != nil {
 		return Env{}, err
 	}
-	var env Env
-	if err := json.Unmarshal(out, &env); err != nil {
-		return Env{}, fmt.Errorf("parse go env: %w", err)
-	}
-	return env, nil
+	return parseGoEnvJSON(out)
 }
 
 func (OSRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	return cmd.CombinedOutput()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+type Decision struct {
+	CanAuto        bool
+	Reason         string
+	InstallCommand string
+	CurrentVersion string
+	ExecutablePath string
+	ExpectedPath   string
+	InstalledNow   string
 }
 
 type Updater struct {
@@ -83,21 +77,15 @@ func New(version string) Updater {
 }
 
 func (u Updater) Decide(ctx context.Context) (Decision, error) {
+	u = u.withDefaults()
 	decision := Decision{
-		InstallCommand: fmt.Sprintf("go install %s", u.Target),
 		CurrentVersion: u.Version,
+		InstallCommand: "go install " + u.Target,
 	}
 
 	execPath, err := u.Runner.Executable()
-	if err != nil {
-		decision.Reason = fmt.Sprintf("could not locate the running executable: %v", err)
-		return decision, nil
-	}
-	decision.ExecutablePath = execPath
-
-	if filepath.Base(execPath) != u.Binary {
-		decision.Reason = fmt.Sprintf("current executable name is %q, expected %q", filepath.Base(execPath), u.Binary)
-		return decision, nil
+	if err == nil {
+		decision.ExecutablePath = execPath
 	}
 
 	if _, err := u.Runner.LookPath("go"); err != nil {
@@ -105,34 +93,35 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 		return decision, nil
 	}
 
-	goEnv, err := u.Runner.GoEnv(ctx)
+	env, err := u.Runner.GoEnv(ctx)
 	if err != nil {
-		decision.Reason = fmt.Sprintf("could not inspect Go environment: %v", err)
+		decision.Reason = "Could not determine Go install directories"
 		return decision, nil
 	}
 
-	binDir := strings.TrimSpace(goEnv.GOBIN)
-	if binDir == "" {
-		gopath := strings.TrimSpace(goEnv.GOPATH)
-		if gopath == "" {
-			decision.Reason = "Go did not report GOBIN or GOPATH"
-			return decision, nil
-		}
-		binDir = filepath.Join(gopath, "bin")
+	expectedPath := expectedBinaryPath(env, u.Binary)
+	if expectedPath == "" {
+		decision.Reason = "Could not determine target install path for `go install`"
+		return decision, nil
+	}
+	decision.ExpectedPath = expectedPath
+
+	if decision.ExecutablePath == "" {
+		decision.Reason = "Could not determine current executable path"
+		return decision, nil
 	}
 
-	decision.ExpectedPath = filepath.Join(binDir, u.Binary)
-	if filepath.Clean(execPath) != filepath.Clean(decision.ExpectedPath) {
-		decision.Reason = fmt.Sprintf("current executable is %q, not the Go install target %q", execPath, decision.ExpectedPath)
+	if filepath.Clean(decision.ExecutablePath) != filepath.Clean(expectedPath) {
+		decision.Reason = fmt.Sprintf("current executable is %s, but `go install` would write %s", decision.ExecutablePath, expectedPath)
 		return decision, nil
 	}
 
 	decision.CanAuto = true
-	decision.InstalledCheck = decision.ExpectedPath
 	return decision, nil
 }
 
 func (u Updater) Update(ctx context.Context) (Decision, error) {
+	u = u.withDefaults()
 	decision, err := u.Decide(ctx)
 	if err != nil {
 		return decision, err
@@ -141,18 +130,55 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 		return decision, fmt.Errorf("%w: %s", ErrManual, decision.Reason)
 	}
 
-	out, err := u.Runner.Run(ctx, "go", "install", u.Target)
+	output, err := u.Runner.Run(ctx, "go", "install", u.Target)
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			return decision, fmt.Errorf("update failed: %w", err)
+		trimmed := strings.TrimSpace(string(output))
+		if trimmed == "" {
+			return decision, fmt.Errorf("automatic update failed: %w\nmanual update: %s", err, decision.InstallCommand)
 		}
-		return decision, fmt.Errorf("update failed: %w\n%s", err, msg)
+		return decision, fmt.Errorf("automatic update failed: %w\nmanual update: %s\noutput:\n%s", err, decision.InstallCommand, trimmed)
 	}
 
-	if versionOut, err := u.Runner.Run(ctx, decision.InstalledCheck, "version"); err == nil {
+	versionOut, err := u.Runner.Run(ctx, decision.ExpectedPath, "version")
+	if err == nil {
 		decision.InstalledNow = strings.TrimSpace(string(versionOut))
 	}
 
 	return decision, nil
+}
+
+func expectedBinaryPath(env Env, binary string) string {
+	if env.GOBIN != "" {
+		return filepath.Join(env.GOBIN, binary)
+	}
+	if env.GOPATH != "" {
+		return filepath.Join(env.GOPATH, "bin", binary)
+	}
+	return ""
+}
+
+func parseGoEnvJSON(out []byte) (Env, error) {
+	var env Env
+	if len(out) == 0 {
+		return env, nil
+	}
+	if err := json.Unmarshal(out, &env); err != nil {
+		return Env{}, fmt.Errorf("parse go env: %w", err)
+	}
+	env.GOBIN = strings.TrimSpace(env.GOBIN)
+	env.GOPATH = strings.TrimSpace(env.GOPATH)
+	return env, nil
+}
+
+func (u Updater) withDefaults() Updater {
+	if u.Runner == nil {
+		u.Runner = OSRunner{}
+	}
+	if u.Target == "" {
+		u.Target = InstallTarget
+	}
+	if u.Binary == "" {
+		u.Binary = "claudeops"
+	}
+	return u
 }
