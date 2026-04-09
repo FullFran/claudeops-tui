@@ -627,6 +627,39 @@ func (m *Model) refreshViewport() {
 		content = renderSettingsTab(*m)
 	}
 	m.viewport.SetContent(content)
+	if m.activeTab == TabSettings {
+		m.scrollSettingsCursorIntoView()
+	}
+}
+
+// scrollSettingsCursorIntoView adjusts the viewport offset so the settings
+// cursor row is visible. Each section header takes 3 lines (blank + title +
+// separator), Thresholds adds 2 extra lines, and each regular item is 1 line.
+// The first 2 lines are the tab header ("Settings" + hint).
+func (m *Model) scrollSettingsCursorIntoView() {
+	items := settingsItems()
+	line := 3 // header + hint + blank line
+	for i, item := range items {
+		if item.section {
+			line++ // blank line before section
+			line++ // section title
+			line++ // separator
+			if item.label == "Thresholds" {
+				line += 2 // warning/alert values + edit hint
+			}
+			continue
+		}
+		if i == m.settingsCursor {
+			break
+		}
+		line++
+	}
+	vpH := m.viewport.Height
+	if line < m.viewport.YOffset {
+		m.viewport.SetYOffset(line - 1)
+	} else if line >= m.viewport.YOffset+vpH {
+		m.viewport.SetYOffset(line - vpH + 2)
+	}
 }
 
 // toggleSettingsItem flips the bool at settingsCursor and persists to disk.
