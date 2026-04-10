@@ -22,6 +22,7 @@ type Env struct {
 
 type Runner interface {
 	Executable() (string, error)
+	EvalSymlinks(path string) (string, error)
 	LookPath(file string) (string, error)
 	GoEnv(ctx context.Context) (Env, error)
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
@@ -31,6 +32,10 @@ type OSRunner struct{}
 
 func (OSRunner) Executable() (string, error) {
 	return os.Executable()
+}
+
+func (OSRunner) EvalSymlinks(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
 }
 
 func (OSRunner) LookPath(file string) (string, error) {
@@ -111,7 +116,9 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 		return decision, nil
 	}
 
-	if filepath.Clean(decision.ExecutablePath) != filepath.Clean(expectedPath) {
+	resolvedExec := resolveOrClean(u.Runner, decision.ExecutablePath)
+	resolvedExpected := resolveOrClean(u.Runner, expectedPath)
+	if resolvedExec != resolvedExpected {
 		decision.Reason = fmt.Sprintf("current executable is %s, but `go install` would write %s", decision.ExecutablePath, expectedPath)
 		return decision, nil
 	}
@@ -145,6 +152,14 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 	}
 
 	return decision, nil
+}
+
+func resolveOrClean(r Runner, path string) string {
+	resolved, err := r.EvalSymlinks(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return resolved
 }
 
 func expectedBinaryPath(env Env, binary string) string {
