@@ -8,8 +8,14 @@
 #
 # updated: 2026-04-08
 
-updated = "2026-04-08"
+updated = "2026-04-17"
 currency = "EUR"
+
+[models."claude-opus-4-7"]
+input         = 13.80
+output        = 69.00
+cache_read    =  1.38
+cache_create  = 17.25
 
 [models."claude-opus-4-6"]
 input         = 13.80
