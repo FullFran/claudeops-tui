@@ -3,9 +3,11 @@
 package pricing
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -39,14 +41,30 @@ func Load(path string) (*Table, error) {
 }
 
 // LoadOrSeed loads `path`; if it does not exist, writes the embedded seed
-// to `path` (mode 0644) and loads it.
+// to `path` (mode 0644) and loads it. If the file already exists, any missing
+// seed models are merged in without overwriting existing user-customized values.
 func LoadOrSeed(path string) (*Table, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := os.WriteFile(path, SeedTOML, 0o644); err != nil {
 			return nil, err
 		}
 	}
-	return Load(path)
+
+	current, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	seed, err := parse(SeedTOML)
+	if err != nil {
+		return nil, err
+	}
+	merged, changed := mergeMissingModels(current, seed)
+	if changed {
+		if err := os.WriteFile(path, encodeTable(merged), 0o644); err != nil {
+			return nil, err
+		}
+	}
+	return merged, nil
 }
 
 func parse(b []byte) (*Table, error) {
@@ -61,6 +79,70 @@ func parse(b []byte) (*Table, error) {
 		t.Currency = "EUR"
 	}
 	return &t, nil
+}
+
+func mergeMissingModels(current, seed *Table) (*Table, bool) {
+	merged := &Table{
+		Updated:  current.Updated,
+		Currency: current.Currency,
+		Models:   make(map[string]ModelPrice, len(current.Models)+len(seed.Models)),
+	}
+	for name, price := range current.Models {
+		merged.Models[name] = price
+	}
+
+	changed := false
+	for name, price := range seed.Models {
+		if _, ok := merged.Models[name]; ok {
+			continue
+		}
+		merged.Models[name] = price
+		changed = true
+	}
+
+	if merged.Currency == "" {
+		merged.Currency = seed.Currency
+		if merged.Currency == "" {
+			merged.Currency = "EUR"
+		}
+	}
+	if changed && seed.Updated != "" {
+		merged.Updated = seed.Updated
+	}
+	return merged, changed
+}
+
+func encodeTable(t *Table) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("# claudeops pricing table.\n")
+	buf.WriteString("#\n")
+	buf.WriteString("# Prices are in EUR per 1,000,000 tokens, split into the four token classes\n")
+	buf.WriteString("# Anthropic charges separately. Edit this file as Anthropic updates pricing.\n")
+	buf.WriteString("#\n")
+	buf.WriteString("# Source: https://www.anthropic.com/pricing  (verify before trusting € numbers)\n")
+	buf.WriteString("# Currency: EUR. Adjust if you want USD — the calculator does not convert.\n\n")
+	fmt.Fprintf(&buf, "updated = %q\n", t.Updated)
+	fmt.Fprintf(&buf, "currency = %q\n\n", t.Currency)
+
+	models := make([]string, 0, len(t.Models))
+	for name := range t.Models {
+		models = append(models, name)
+	}
+	sort.Strings(models)
+
+	for i, name := range models {
+		price := t.Models[name]
+		fmt.Fprintf(&buf, "[models.%q]\n", name)
+		fmt.Fprintf(&buf, "input         = %5.4f\n", price.Input)
+		fmt.Fprintf(&buf, "output        = %5.4f\n", price.Output)
+		fmt.Fprintf(&buf, "cache_read    = %5.4f\n", price.CacheRead)
+		fmt.Fprintf(&buf, "cache_create  = %5.4f\n", price.CacheCreate)
+		if i < len(models)-1 {
+			buf.WriteString("\n")
+		}
+	}
+	buf.WriteString("\n")
+	return buf.Bytes()
 }
 
 // Calculator is a thin wrapper that warns once per unknown model and

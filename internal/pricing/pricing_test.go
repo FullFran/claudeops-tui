@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -74,5 +75,72 @@ func TestLoadOrSeed(t *testing.T) {
 	// Second load also works.
 	if _, err := LoadOrSeed(p); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLoadOrSeedMergesMissingSeedModelsWithoutOverwritingExistingValues(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "pricing.toml")
+
+	const stale = `
+updated = "2026-04-01"
+currency = "EUR"
+
+[models."claude-opus-4-6"]
+input        = 99.0
+output       = 88.0
+cache_read   = 77.0
+cache_create = 66.0
+`
+	if err := os.WriteFile(p, []byte(strings.TrimSpace(stale)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tbl, err := LoadOrSeed(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := tbl.Models["claude-opus-4-6"]
+	if got.Input != 99.0 || got.Output != 88.0 || got.CacheRead != 77.0 || got.CacheCreate != 66.0 {
+		t.Fatalf("existing model overwritten: %+v", got)
+	}
+	if _, ok := tbl.Models["claude-opus-4-7"]; !ok {
+		t.Fatal("missing merged seed model claude-opus-4-7")
+	}
+	if tbl.Updated != "2026-04-17" {
+		t.Fatalf("updated = %q, want seed date after merge", tbl.Updated)
+	}
+
+	reloaded, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reloaded.Models["claude-opus-4-7"]; !ok {
+		t.Fatal("merged model not persisted to disk")
+	}
+	if reloaded.Models["claude-opus-4-6"].Input != 99.0 {
+		t.Fatalf("persisted custom value lost: %+v", reloaded.Models["claude-opus-4-6"])
+	}
+}
+
+func TestLoadOrSeedKeepsCurrentFileUntouchedWhenSeedModelsAlreadyExist(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "pricing.toml")
+	original := string(SeedTOML)
+	if err := os.WriteFile(p, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadOrSeed(p); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != original {
+		t.Fatal("expected current pricing file to remain untouched when no merge is needed")
 	}
 }
