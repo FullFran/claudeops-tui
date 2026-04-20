@@ -13,6 +13,7 @@ import (
 
 	"github.com/fullfran/claudeops-tui/internal/config"
 	"github.com/fullfran/claudeops-tui/internal/insights"
+	"github.com/fullfran/claudeops-tui/internal/live"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
 	"github.com/fullfran/claudeops-tui/internal/usage"
@@ -27,6 +28,8 @@ type Model struct {
 	ConfigPath     string // path to config.toml for live saves
 	PricingUpdated string
 	Version        string
+	ProjectsRoot   string // ~/.claude/projects — scanned for live sessions
+	LiveDir        string // ~/.claudeops/live — hook-written session sidecars
 
 	// snapshot
 	Today                store.Aggregates
@@ -49,6 +52,7 @@ type Model struct {
 	ActiveTask           *tasks.Task
 	HourlyGlobal         []store.HourlyAgg  // global per-hour aggregates for insights
 	Insights             []insights.Insight // computed insights
+	LiveSessions         []live.Session     // active Claude Code sessions for the Classroom tab
 
 	// ui state
 	activeTab Tab
@@ -237,6 +241,7 @@ type refreshMsg struct {
 	activeTask           *tasks.Task
 	hourlyGlobal         []store.HourlyAgg
 	computedInsights     []insights.Insight
+	liveSessions         []live.Session
 }
 
 func currentSevenDayCycleWindow(snap *usage.Snapshot) (time.Time, time.Time, bool) {
@@ -322,6 +327,11 @@ func refreshCmd(m Model) tea.Cmd {
 		if m.Tasks != nil {
 			if t, ok := m.Tasks.Current(); ok {
 				msg.activeTask = t
+			}
+		}
+		if m.ProjectsRoot != "" || m.LiveDir != "" {
+			if sessions, err := live.Scan(m.ProjectsRoot, live.Config{LiveDir: m.LiveDir}); err == nil {
+				msg.liveSessions = sessions
 			}
 		}
 		return msg
@@ -429,6 +439,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewMode = viewNormal
 			m.refreshViewport()
 		case "7":
+			m.activeTab = TabClassroom
+			m.viewMode = viewNormal
+			m.refreshViewport()
+		case "8":
 			m.activeTab = TabSettings
 			m.viewMode = viewNormal
 			m.settingsCursor = 1 // skip first section header
@@ -516,6 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ActiveTask = msg.activeTask
 		m.HourlyGlobal = msg.hourlyGlobal
 		m.Insights = msg.computedInsights
+		m.LiveSessions = msg.liveSessions
 		m.refreshViewport()
 	}
 	// Forward unknown keys / scroll keys to the viewport for every tab.
@@ -667,6 +682,8 @@ func (m *Model) refreshViewport() {
 		content = renderTasksTab(*m)
 	case TabInsights:
 		content = renderInsightsTab(*m)
+	case TabClassroom:
+		content = renderClassroomTab(*m)
 	case TabSettings:
 		content = renderSettingsTab(*m)
 	}

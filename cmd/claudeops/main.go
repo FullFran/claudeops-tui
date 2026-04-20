@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/fullfran/claudeops-tui/internal/collector"
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/hooks"
 	"github.com/fullfran/claudeops-tui/internal/mcpserver"
 	"github.com/fullfran/claudeops-tui/internal/pricing"
 	"github.com/fullfran/claudeops-tui/internal/store"
@@ -37,6 +39,7 @@ var (
 	runTaskCommand   = cmdTask
 	runIngestCommand = cmdIngest
 	runUpdateCommand = cmdUpdate
+	runHooksCommand  = cmdHooks
 )
 
 func run() error {
@@ -59,6 +62,8 @@ func runArgs(args []string) error {
 		return runIngestCommand()
 	case "update":
 		return runUpdateCommand()
+	case "hooks":
+		return runHooksCommand(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -78,6 +83,9 @@ Usage:
   claudeops task list             list all tasks
   claudeops ingest                one-shot ingest of existing JSONL files
   claudeops update                update the installed CLI
+  claudeops hooks install         register Claude Code hooks for live status
+  claudeops hooks uninstall       remove claudeops hooks from settings.json
+  claudeops hooks status          show which hooks are registered
   claudeops mcp                   start MCP server over stdio
   claudeops version               print version
 
@@ -156,6 +164,8 @@ func cmdTUI() error {
 
 	model := tui.NewWithSettings(s, uClient, tr, settings, calc.Updated(), version)
 	model.ConfigPath = p.ConfigPath
+	model.ProjectsRoot = p.ClaudeProjects
+	model.LiveDir = p.LiveDir
 	prog := tea.NewProgram(model, tea.WithAltScreen())
 	_, err = prog.Run()
 	return err
@@ -231,4 +241,70 @@ func cmdTask(args []string) error {
 	default:
 		return fmt.Errorf("task: unknown subcommand %q", args[0])
 	}
+}
+
+func cmdHooks(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("hooks: missing subcommand (install|uninstall|status|handle)")
+	}
+	p, err := config.Default()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "install":
+		bin, err := resolveBinary()
+		if err != nil {
+			return err
+		}
+		if err := hooks.Install(p.ClaudeSettings, bin); err != nil {
+			return err
+		}
+		fmt.Printf("installed claudeops hooks into %s\n", p.ClaudeSettings)
+		fmt.Printf("binary: %s\n", bin)
+		return nil
+	case "uninstall":
+		if err := hooks.Uninstall(p.ClaudeSettings); err != nil {
+			return err
+		}
+		fmt.Printf("removed claudeops hooks from %s\n", p.ClaudeSettings)
+		return nil
+	case "status":
+		bin, _ := resolveBinary()
+		r, err := hooks.Status(p.ClaudeSettings, bin)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("settings: %s\n", r.SettingsPath)
+		fmt.Printf("binary:   %s (exists: %v)\n", r.Binary, r.BinaryExists)
+		for _, ev := range hooks.ManagedEvents {
+			mark := "✗"
+			if r.Events[ev] {
+				mark = "✓"
+			}
+			fmt.Printf("  %s %s\n", mark, ev)
+		}
+		return nil
+	case "handle":
+		// Invoked by Claude Code itself. Stay silent on success, log to stderr
+		// on failure, always exit 0 so we never block the user's session.
+		if err := hooks.Handle(os.Stdin, p.LiveDir); err != nil {
+			fmt.Fprintln(os.Stderr, "claudeops: hook handle:", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("hooks: unknown subcommand %q", args[0])
+	}
+}
+
+func resolveBinary() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return exe, nil
+	}
+	return resolved, nil
 }

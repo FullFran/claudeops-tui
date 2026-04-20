@@ -12,11 +12,13 @@ type Paths struct {
 	ClaudeDir       string // ~/.claude
 	ClaudeProjects  string // ~/.claude/projects
 	ClaudeCreds     string // ~/.claude/.credentials.json
+	ClaudeSettings  string // ~/.claude/settings.json
 	DataDir         string // ~/.claudeops
 	DBPath          string // ~/.claudeops/claudeops.db
 	PricingPath     string // ~/.claudeops/pricing.toml
 	CurrentTaskPath string // ~/.claudeops/current-task.json
 	ConfigPath      string // ~/.claudeops/config.toml
+	LiveDir         string // ~/.claudeops/live — hook-written session sidecars
 }
 
 // Default builds Paths from the user's HOME (or HOME override for tests).
@@ -37,11 +39,13 @@ func ForHome(home string) Paths {
 		ClaudeDir:       claude,
 		ClaudeProjects:  filepath.Join(claude, "projects"),
 		ClaudeCreds:     filepath.Join(claude, ".credentials.json"),
+		ClaudeSettings:  filepath.Join(claude, "settings.json"),
 		DataDir:         data,
 		DBPath:          filepath.Join(data, "claudeops.db"),
 		PricingPath:     filepath.Join(data, "pricing.toml"),
 		CurrentTaskPath: filepath.Join(data, "current-task.json"),
 		ConfigPath:      filepath.Join(data, "config.toml"),
+		LiveDir:         filepath.Join(data, "live"),
 	}
 }
 

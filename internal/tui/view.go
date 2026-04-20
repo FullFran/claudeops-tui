@@ -61,7 +61,7 @@ func renderHelp(m Model) string {
 	sb.WriteString(titleStyle.Render("claudeops — keybindings") + "\n\n")
 	sb.WriteString(dimStyle.Render("  Navigation") + "\n")
 	for _, r := range [][2]string{
-		{"1-7", "switch to tab N"},
+		{"1-8", "switch to tab N"},
 		{"tab / shift+tab", "cycle tabs forward / back"},
 		{"← → h l", "cycle tabs"},
 		{"↑ ↓ j k", "scroll content / navigate lists"},
@@ -112,6 +112,13 @@ func renderHelp(m Model) string {
 	} {
 		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
 	}
+	sb.WriteString("\n" + dimStyle.Render("  Classroom") + "\n")
+	for _, r := range [][2]string{
+		{"(auto-refresh)", "live grid of Claude Code sessions (2s tick)"},
+		{"✨ / 💤", "working / waiting for your input"},
+	} {
+		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
+	}
 	sb.WriteString("\n" + dimStyle.Render("press any key to dismiss"))
 	return sb.String()
 }
@@ -133,14 +140,14 @@ func contextHints(m Model) string {
 		return "j/k move · space toggle · esc back · ? help"
 	case TabDashboard:
 		if len(m.Daily) > 0 {
-			return "1-7 tabs · enter browse days · n task · r refresh · ? help · q quit"
+			return "1-8 tabs · enter browse days · n task · r refresh · ? help · q quit"
 		}
 	case TabSessions:
 		if len(m.AllSess) > 0 {
-			return "1-7 tabs · enter browse · n task · r refresh · ? help · q quit"
+			return "1-8 tabs · enter browse · n task · r refresh · ? help · q quit"
 		}
 	}
-	return "1-7 tabs · n task · S stop · r refresh · ? help · q quit"
+	return "1-8 tabs · n task · S stop · r refresh · ? help · q quit"
 }
 
 // padRight pads a string with spaces on the right to width n.
