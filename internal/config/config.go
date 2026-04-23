@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -23,6 +24,43 @@ type Settings struct {
 	Keybindings KeybindingsSettings `toml:"keybindings"`
 	Usage       UsageSettings       `toml:"usage"`
 	Insights    InsightsSettings    `toml:"insights"`
+	Export      ExportSettings      `toml:"export"`
+}
+
+// ExportSettings controls telemetry export via OTLP.
+type ExportSettings struct {
+	Enabled    bool               `toml:"enabled"`
+	UserName   string             `toml:"user_name"`
+	TeamName   string             `toml:"team_name"`
+	Endpoint   string             `toml:"endpoint"`
+	Headers    map[string]string  `toml:"headers"`
+	ClaudeOTel ClaudeOTelSettings `toml:"claude_otel"`
+}
+
+// ClaudeOTelSettings controls Claude-specific OpenTelemetry export options.
+type ClaudeOTelSettings struct {
+	Enabled            bool `toml:"enabled"`
+	IncludeUserPrompts bool `toml:"include_user_prompts"`
+	IncludeToolDetails bool `toml:"include_tool_details"`
+}
+
+// Validate checks ExportSettings for consistency. Returns an error if the
+// combination of fields is invalid (e.g. enabled but no endpoint).
+func (e ExportSettings) Validate() error {
+	if e.ClaudeOTel.Enabled && !e.Enabled {
+		return errors.New("claude_otel requires export.enabled=true")
+	}
+	if !e.Enabled {
+		return nil
+	}
+	if e.Endpoint == "" {
+		return errors.New("export: endpoint must not be empty when enabled=true")
+	}
+	u, err := url.Parse(e.Endpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("export: endpoint must be a valid http/https URL, got %q", e.Endpoint)
+	}
+	return nil
 }
 
 // UsageSettings controls how often the Anthropic usage endpoint is polled.
@@ -35,21 +73,21 @@ type UsageSettings struct {
 // DashboardSettings toggles individual widgets on the main dashboard tab.
 // Each Show* field is consulted by views_dashboard.go before rendering.
 type DashboardSettings struct {
-	ShowSubscription   bool                `toml:"show_subscription"`
-	ShowToday          bool                `toml:"show_today"`
-	ShowTopSessions    bool                `toml:"show_top_sessions"`
-	ShowTopProjects    bool                `toml:"show_top_projects"`
-	ShowActiveTask     bool                `toml:"show_active_task"`
-	ShowSparkline14d   bool                `toml:"show_sparkline_14d"`
-	ShowPerModelToday  bool                `toml:"show_per_model_today"`
-	ShowBurnRate       bool                `toml:"show_burn_rate"`
-	ShowStreak         bool                `toml:"show_streak"`
-	ShowAvgPerSession  bool                `toml:"show_avg_per_session"`
-	ShowCacheHitRatio  bool                `toml:"show_cache_hit_ratio"`
-	ShowTokensPerEuro  bool                `toml:"show_tokens_per_euro"`
-	ShowMaxDay30d      bool                `toml:"show_max_day_30d"`
-	ShowVsAvg7d        bool                `toml:"show_vs_avg_7d"`
-	Thresholds         ThresholdsSettings  `toml:"thresholds"`
+	ShowSubscription  bool               `toml:"show_subscription"`
+	ShowToday         bool               `toml:"show_today"`
+	ShowTopSessions   bool               `toml:"show_top_sessions"`
+	ShowTopProjects   bool               `toml:"show_top_projects"`
+	ShowActiveTask    bool               `toml:"show_active_task"`
+	ShowSparkline14d  bool               `toml:"show_sparkline_14d"`
+	ShowPerModelToday bool               `toml:"show_per_model_today"`
+	ShowBurnRate      bool               `toml:"show_burn_rate"`
+	ShowStreak        bool               `toml:"show_streak"`
+	ShowAvgPerSession bool               `toml:"show_avg_per_session"`
+	ShowCacheHitRatio bool               `toml:"show_cache_hit_ratio"`
+	ShowTokensPerEuro bool               `toml:"show_tokens_per_euro"`
+	ShowMaxDay30d     bool               `toml:"show_max_day_30d"`
+	ShowVsAvg7d       bool               `toml:"show_vs_avg_7d"`
+	Thresholds        ThresholdsSettings `toml:"thresholds"`
 }
 
 // ThresholdsSettings sets the cutoffs for color-coding daily spend.
@@ -141,6 +179,9 @@ func DefaultSettings() Settings {
 		},
 		Usage: UsageSettings{
 			CacheTTLSeconds: 300,
+		},
+		Export: ExportSettings{
+			Headers: map[string]string{},
 		},
 	}
 }
