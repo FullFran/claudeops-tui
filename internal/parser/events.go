@@ -60,10 +60,10 @@ type rawAssistant struct {
 	Message struct {
 		Model string `json:"model"`
 		Usage struct {
-			Input        int64 `json:"input_tokens"`
-			Output       int64 `json:"output_tokens"`
-			CacheCreate  int64 `json:"cache_creation_input_tokens"`
-			CacheRead    int64 `json:"cache_read_input_tokens"`
+			Input       int64 `json:"input_tokens"`
+			Output      int64 `json:"output_tokens"`
+			CacheCreate int64 `json:"cache_creation_input_tokens"`
+			CacheRead   int64 `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 }

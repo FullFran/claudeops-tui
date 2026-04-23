@@ -80,12 +80,12 @@ type NamedBucket struct {
 
 // Client fetches usage data with caching and OAuth refresh.
 type Client struct {
-	UsageURL    string
-	RefreshURL  string
-	UserAgent   string
-	CredsPath   string
-	HTTP        *http.Client
-	CacheTTL    time.Duration
+	UsageURL   string
+	RefreshURL string
+	UserAgent  string
+	CredsPath  string
+	HTTP       *http.Client
+	CacheTTL   time.Duration
 	// DefaultBackoff is used when the server returns 429/5xx without a
 	// Retry-After header. Anthropic's undocumented usage endpoint is shared
 	// with Claude Code itself, so the safest default is conservative.
@@ -111,10 +111,10 @@ func (e *rateLimitedError) Error() string {
 // ~/.claude/.credentials.json.
 func New(credsPath string) *Client {
 	return &Client{
-		UsageURL:   DefaultUsageURL,
-		RefreshURL: DefaultRefreshURL,
-		UserAgent:  "claudeops/0.1",
-		CredsPath:  credsPath,
+		UsageURL:       DefaultUsageURL,
+		RefreshURL:     DefaultRefreshURL,
+		UserAgent:      "claudeops/0.1",
+		CredsPath:      credsPath,
 		HTTP:           &http.Client{Timeout: 10 * time.Second},
 		CacheTTL:       5 * time.Minute,
 		DefaultBackoff: 5 * time.Minute,

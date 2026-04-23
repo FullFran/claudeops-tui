@@ -65,4 +65,3 @@ func (s *Server) handleInsights(ctx context.Context, req mcp.CallToolRequest) (*
 	}
 	return mcp.NewToolResultText(string(b)), nil
 }
-

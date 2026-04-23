@@ -10,17 +10,17 @@ import (
 )
 
 type fakeRunner struct {
-	execPath       string
-	execErr        error
-	goPath         string
-	goPathErr      error
-	goEnv          Env
-	goEnvErr       error
-	symlinkMap     map[string]string // path -> resolved path
-	symlinkErr     error
-	runResults     map[string]fakeRunResult
-	runCalls       []fakeRunCall
-	lookPathCalls  []string
+	execPath      string
+	execErr       error
+	goPath        string
+	goPathErr     error
+	goEnv         Env
+	goEnvErr      error
+	symlinkMap    map[string]string // path -> resolved path
+	symlinkErr    error
+	runResults    map[string]fakeRunResult
+	runCalls      []fakeRunCall
+	lookPathCalls []string
 }
 
 type fakeRunCall struct {
@@ -374,7 +374,7 @@ func TestDecideAutoWhenExecutableIsSymlinkToGoBin(t *testing.T) {
 		goPath:   "/usr/bin/go",
 		goEnv:    Env{GOBIN: "/home/user/go/bin"},
 		symlinkMap: map[string]string{
-			"/usr/local/bin/claudeops":  "/home/user/go/bin/claudeops",
+			"/usr/local/bin/claudeops":    "/home/user/go/bin/claudeops",
 			"/home/user/go/bin/claudeops": "/home/user/go/bin/claudeops",
 		},
 	}

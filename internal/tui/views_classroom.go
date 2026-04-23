@@ -36,12 +36,12 @@ var (
 	deskStyleWorking = lipgloss.NewStyle().
 				Border(deskBorder).
 				BorderForeground(lipgloss.Color("10")). // green
-				Width(deskWidth - 2).
+				Width(deskWidth-2).
 				Padding(0, 1)
 	deskStyleWaiting = lipgloss.NewStyle().
 				Border(deskBorder).
 				BorderForeground(lipgloss.Color("11")). // yellow
-				Width(deskWidth - 2).
+				Width(deskWidth-2).
 				Padding(0, 1)
 	monkeyStyleWorking = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	monkeyStyleWaiting = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))

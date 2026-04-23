@@ -320,7 +320,7 @@ func TestPeakHours(t *testing.T) {
 			wantOk: false,
 		},
 		{
-			name: "nil skips",
+			name:   "nil skips",
 			hourly: nil,
 			wantOk: false,
 		},

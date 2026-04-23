@@ -135,7 +135,10 @@ func renderDayDetail(m Model) string {
 				maxH = h.CostEUR
 			}
 		}
-		hourMap := make(map[int]struct{ cost float64; events int64 })
+		hourMap := make(map[int]struct {
+			cost   float64
+			events int64
+		})
 		for _, h := range d.Hourly {
 			hourMap[h.Hour] = struct {
 				cost   float64

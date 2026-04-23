@@ -24,7 +24,7 @@ func TestGlobalHourlyAggregates(t *testing.T) {
 		cost float64
 	}{
 		{"h1", atHour(baseDay, 9), 1.0},
-		{"h2", atHour(baseDay, 9), 2.0},  // second event same hour
+		{"h2", atHour(baseDay, 9), 2.0}, // second event same hour
 		{"h3", atHour(baseDay, 14), 3.0},
 		{"h4", atHour(baseDay.AddDate(0, 0, -1), 9), 0.5}, // yesterday same hour
 	}

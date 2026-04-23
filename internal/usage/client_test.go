@@ -69,8 +69,8 @@ func TestGetCaches(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"five_hour": map[string]any{"utilization": 1.0, "resets_at": "2026-04-08T18:59:59Z"},
-			"seven_day": map[string]any{"utilization": 2.0, "resets_at": "2026-04-14T16:59:59Z"},
+			"five_hour":      map[string]any{"utilization": 1.0, "resets_at": "2026-04-08T18:59:59Z"},
+			"seven_day":      map[string]any{"utilization": 2.0, "resets_at": "2026-04-14T16:59:59Z"},
 			"seven_day_opus": map[string]any{"utilization": 3.0, "resets_at": "2026-04-14T17:59:59Z"},
 		})
 	}))
