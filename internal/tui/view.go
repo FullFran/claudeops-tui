@@ -41,6 +41,12 @@ func (m Model) View() string {
 		sb.WriteString("  " + m.taskInput.View() + "\n")
 		sb.WriteString(dimStyle.Render("  enter: start · esc: cancel") + "\n")
 	}
+	// Modal: settings string edit
+	if m.settingsEditOpen {
+		sb.WriteString("\n" + headerStyle.Render("Edit value") + "\n")
+		sb.WriteString("  " + m.settingsInput.View() + "\n")
+		sb.WriteString(dimStyle.Render("  enter: save · esc: cancel") + "\n")
+	}
 
 	// Transient status line (last action result)
 	if m.statusMsg != "" {
@@ -100,7 +106,9 @@ func renderHelp(m Model) string {
 	sb.WriteString("\n" + dimStyle.Render("  Settings tab") + "\n")
 	for _, r := range [][2]string{
 		{"j / k", "move cursor"},
-		{"space / enter", "toggle on/off (auto-saved)"},
+		{"space / enter", "toggle bool (auto-saved)"},
+		{"enter (on string)", "edit value inline"},
+		{"enter (on ► action)", "run action (push, apply OTel)"},
 	} {
 		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
 	}
@@ -137,7 +145,17 @@ func contextHints(m Model) string {
 	}
 	switch m.activeTab {
 	case TabSettings:
-		return "j/k move · space toggle · esc back · ? help"
+		items := settingsItems()
+		if m.settingsCursor >= 0 && m.settingsCursor < len(items) {
+			item := items[m.settingsCursor]
+			if item.isString {
+				return "j/k move · enter edit · esc cancel · ? help"
+			}
+			if item.actionKey != "" {
+				return "j/k move · enter run · ? help"
+			}
+		}
+		return "j/k move · space/enter toggle · ? help"
 	case TabDashboard:
 		if len(m.Daily) > 0 {
 			return "1-8 tabs · enter browse days · n task · r refresh · ? help · q quit"

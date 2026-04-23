@@ -4,6 +4,10 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/export"
 	"github.com/fullfran/claudeops-tui/internal/insights"
 	"github.com/fullfran/claudeops-tui/internal/live"
 	"github.com/fullfran/claudeops-tui/internal/store"
@@ -68,7 +73,10 @@ type Model struct {
 	statusMsg     string // transient feedback (e.g. "task started: foo")
 
 	// settings tab state
-	settingsCursor int // selected row in the settings list
+	settingsCursor   int // selected row in the settings list
+	settingsInput    textinput.Model
+	settingsEditOpen bool
+	settingsSetStr   func(*config.Settings, string) // active setter for string edit
 
 	// day drill-down state
 	viewMode  viewMode
@@ -144,6 +152,11 @@ func NewWithSettings(s *store.Store, u *usage.Client, tr *tasks.Tracker, setting
 	ti.Placeholder = "task name…"
 	ti.CharLimit = 80
 	ti.Width = 40
+
+	si := textinput.New()
+	si.CharLimit = 200
+	si.Width = 50
+
 	return Model{
 		Store:          s,
 		Usage:          u,
@@ -153,6 +166,7 @@ func NewWithSettings(s *store.Store, u *usage.Client, tr *tasks.Tracker, setting
 		Version:        version,
 		activeTab:      TabDashboard,
 		taskInput:      ti,
+		settingsInput:  si,
 	}
 }
 
@@ -167,6 +181,44 @@ type tickMsg struct{}
 type taskActionMsg struct {
 	status string
 	err    error
+}
+
+// exportPushMsg is the result of a claudeops push triggered from Settings.
+type exportPushMsg struct {
+	result export.PushResult
+	err    error
+}
+
+// otelApplyMsg is the result of otel-config apply triggered from Settings.
+type otelApplyMsg struct {
+	err error
+}
+
+func (m Model) pushNowCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.Store == nil {
+			return exportPushMsg{err: fmt.Errorf("store not available")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		home, _ := os.UserHomeDir()
+		credPath := filepath.Join(home, ".claude", ".credentials.json")
+		pusher := export.New(m.Store, m.Settings.Export,
+			export.NewFileCredReader(credPath),
+			&http.Client{Timeout: 30 * time.Second},
+			nil)
+		result, err := pusher.Push(ctx, export.PushOptions{})
+		return exportPushMsg{result: result, err: err}
+	}
+}
+
+func (m Model) applyOTelCmd() tea.Cmd {
+	return func() tea.Msg {
+		home, _ := os.UserHomeDir()
+		settingsPath := filepath.Join(home, ".claude", "settings.json")
+		err := export.ApplyOTelConfig(settingsPath, m.Settings.Export)
+		return otelApplyMsg{err: err}
+	}
 }
 
 // dayDetailMsg is the result of loading drill-down data for a single day.
@@ -365,6 +417,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.taskInput, ic = m.taskInput.Update(msg)
 			return m, ic
 		}
+		// Settings string edit modal.
+		if m.settingsEditOpen {
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.settingsEditOpen = false
+				m.settingsInput.Blur()
+				m.settingsInput.SetValue("")
+				m.settingsSetStr = nil
+				return m, nil
+			case "enter":
+				val := strings.TrimSpace(m.settingsInput.Value())
+				m.settingsEditOpen = false
+				m.settingsInput.Blur()
+				m.settingsInput.SetValue("")
+				if m.settingsSetStr != nil {
+					m.settingsSetStr(&m.Settings, val)
+					m.settingsSetStr = nil
+					if m.ConfigPath != "" {
+						if err := config.Save(m.ConfigPath, m.Settings); err != nil {
+							m.statusMsg = "config save: " + err.Error()
+						} else {
+							m.statusMsg = "saved config.toml"
+						}
+					}
+				}
+				m.refreshViewport()
+				return m, nil
+			}
+			var ic tea.Cmd
+			m.settingsInput, ic = m.settingsInput.Update(msg)
+			return m, ic
+		}
 		// Help overlay: any key dismisses it.
 		if m.showHelp {
 			m.showHelp = false
@@ -449,13 +533,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 		case " ":
 			if m.activeTab == TabSettings {
-				m.toggleSettingsItem()
-				m.refreshViewport()
+				items := settingsItems()
+				if m.settingsCursor >= 0 && m.settingsCursor < len(items) &&
+					items[m.settingsCursor].toggle != nil {
+					m.toggleSettingsItem()
+					m.refreshViewport()
+				}
 			}
 		case "enter":
 			if m.activeTab == TabSettings {
-				m.toggleSettingsItem()
-				m.refreshViewport()
+				items := settingsItems()
+				if m.settingsCursor >= 0 && m.settingsCursor < len(items) {
+					item := items[m.settingsCursor]
+					switch {
+					case item.toggle != nil:
+						m.toggleSettingsItem()
+						m.refreshViewport()
+					case item.isString && item.setString != nil:
+						m.settingsInput.Placeholder = item.label + "…"
+						m.settingsInput.SetValue(item.getString(m.Settings))
+						m.settingsInput.CursorEnd()
+						m.settingsSetStr = item.setString
+						m.settingsEditOpen = true
+						m.settingsInput.Focus()
+						return m, textinput.Blink
+					case item.actionKey == "push_now":
+						m.statusMsg = "pushing…"
+						return m, m.pushNowCmd()
+					case item.actionKey == "apply_otel":
+						m.statusMsg = "applying OTel config…"
+						return m, m.applyOTelCmd()
+					}
+				}
 			} else if m.activeTab == TabDashboard && len(m.Daily) > 0 {
 				m.viewMode = viewDayBrowse
 				m.dayCursor = len(m.Daily) - 1 // start on today
@@ -509,6 +618,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = msg.status
 		}
 		cmds = append(cmds, refreshCmd(m))
+	case exportPushMsg:
+		if msg.err != nil {
+			m.statusMsg = "push failed: " + msg.err.Error()
+		} else {
+			m.statusMsg = fmt.Sprintf("pushed %d data points  %s → %s",
+				msg.result.DataPoints,
+				msg.result.PeriodFrom.Format("Jan 02 15:04"),
+				msg.result.PeriodTo.Format("Jan 02 15:04"))
+		}
+		m.refreshViewport()
+	case otelApplyMsg:
+		if msg.err != nil {
+			m.statusMsg = "otel-config failed: " + msg.err.Error()
+		} else {
+			m.statusMsg = "OTel config written to ~/.claude/settings.json"
+		}
+		m.refreshViewport()
 	case refreshMsg:
 		m.Today = msg.today
 		m.Last7d = msg.last7d
@@ -544,21 +670,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// moveSettingsCursor moves the cursor by delta, skipping section headers.
+// isSettingsNonNav reports whether an item should be skipped during cursor navigation.
+func isSettingsNonNav(item settingsItem) bool {
+	return item.section || item.skip
+}
+
+// moveSettingsCursor moves the cursor by delta, skipping non-navigable rows.
 func (m *Model) moveSettingsCursor(delta int) {
 	items := settingsItems()
 	m.settingsCursor += delta
-	for m.settingsCursor >= 0 && m.settingsCursor < len(items) && items[m.settingsCursor].section {
+	for m.settingsCursor >= 0 && m.settingsCursor < len(items) && isSettingsNonNav(items[m.settingsCursor]) {
 		m.settingsCursor += delta
 	}
 	if m.settingsCursor < 0 {
 		m.settingsCursor = 0
-		for m.settingsCursor < len(items) && items[m.settingsCursor].section {
+		for m.settingsCursor < len(items) && isSettingsNonNav(items[m.settingsCursor]) {
 			m.settingsCursor++
 		}
 	}
 	if m.settingsCursor >= len(items) {
 		m.settingsCursor = len(items) - 1
+		for m.settingsCursor >= 0 && isSettingsNonNav(items[m.settingsCursor]) {
+			m.settingsCursor--
+		}
 	}
 }
 
@@ -735,7 +869,7 @@ func (m *Model) toggleSettingsItem() {
 		return
 	}
 	item := items[m.settingsCursor]
-	if item.section {
+	if item.section || item.toggle == nil {
 		return
 	}
 	item.toggle(&m.Settings)
