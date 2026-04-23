@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/fullfran/claudeops-tui/internal/collector"
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/export"
 	"github.com/fullfran/claudeops-tui/internal/hooks"
 	"github.com/fullfran/claudeops-tui/internal/mcpserver"
 	"github.com/fullfran/claudeops-tui/internal/pricing"
@@ -35,11 +38,13 @@ func main() {
 }
 
 var (
-	runMCPCommand    = cmdMCP
-	runTaskCommand   = cmdTask
-	runIngestCommand = cmdIngest
-	runUpdateCommand = cmdUpdate
-	runHooksCommand  = cmdHooks
+	runMCPCommand        = cmdMCP
+	runTaskCommand       = cmdTask
+	runIngestCommand     = cmdIngest
+	runUpdateCommand     = cmdUpdate
+	runHooksCommand      = cmdHooks
+	runPushCommand       = cmdPush
+	runOTelConfigCommand = cmdOTelConfig
 )
 
 func run() error {
@@ -64,6 +69,10 @@ func runArgs(args []string) error {
 		return runUpdateCommand()
 	case "hooks":
 		return runHooksCommand(args[1:])
+	case "push":
+		return runPushCommand(args[1:])
+	case "otel-config":
+		return runOTelConfigCommand(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -77,17 +86,21 @@ func printHelp() {
 	fmt.Println(`claudeops — local TUI for Claude Code usage tracking
 
 Usage:
-  claudeops                       launch the dashboard TUI (default)
-  claudeops task start "<name>"   start a task
-  claudeops task stop             stop the current task
-  claudeops task list             list all tasks
-  claudeops ingest                one-shot ingest of existing JSONL files
-  claudeops update                update the installed CLI
-  claudeops hooks install         register Claude Code hooks for live status
-  claudeops hooks uninstall       remove claudeops hooks from settings.json
-  claudeops hooks status          show which hooks are registered
-  claudeops mcp                   start MCP server over stdio
-  claudeops version               print version
+  claudeops                                     launch the dashboard TUI (default)
+  claudeops task start "<name>"                 start a task
+  claudeops task stop                           stop the current task
+  claudeops task list                           list all tasks
+  claudeops ingest                              one-shot ingest of existing JSONL files
+  claudeops update                              update the installed CLI
+  claudeops hooks install                       register Claude Code hooks for live status
+  claudeops hooks uninstall                     remove claudeops hooks from settings.json
+  claudeops hooks status                        show which hooks are registered
+  claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
+  claudeops otel-config apply                   configure Claude Code OTel telemetry
+  claudeops otel-config status                  show OTel telemetry configuration
+  claudeops otel-config remove                  remove OTel telemetry configuration
+  claudeops mcp                                 start MCP server over stdio
+  claudeops version                             print version
 
 Files:
   ~/.claudeops/claudeops.db        local SQLite store
@@ -307,4 +320,100 @@ func resolveBinary() (string, error) {
 		return exe, nil
 	}
 	return resolved, nil
+}
+
+func cmdPush(args []string) error {
+	fs := flag.NewFlagSet("push", flag.ContinueOnError)
+	dryRun := fs.Bool("dry-run", false, "build payload and print to stdout, do not send")
+	since := fs.String("since", "", "override window start (RFC3339)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	var sinceTime *time.Time
+	if *since != "" {
+		t, err := time.Parse(time.RFC3339, *since)
+		if err != nil {
+			return fmt.Errorf("push: --since: invalid RFC3339 time %q: %w", *since, err)
+		}
+		sinceTime = &t
+	}
+
+	p, s, _, _, err := openCore()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	settings, err := config.Load(p.ConfigPath)
+	if err != nil {
+		return fmt.Errorf("push: load config: %w", err)
+	}
+
+	credsPath := filepath.Join(os.Getenv("HOME"), ".claude", ".credentials.json")
+	pusher := export.New(s, settings.Export, export.NewFileCredReader(credsPath),
+		&http.Client{Timeout: 30 * time.Second}, os.Stdout)
+
+	ctx := context.Background()
+	result, err := pusher.Push(ctx, export.PushOptions{DryRun: *dryRun, Since: sinceTime})
+	if err != nil {
+		return err
+	}
+	if !result.DryRun {
+		fmt.Fprintf(os.Stdout, "pushed %d data points — window %s → %s\n",
+			result.DataPoints,
+			result.PeriodFrom.Format(time.RFC3339),
+			result.PeriodTo.Format(time.RFC3339))
+	}
+	return nil
+}
+
+func cmdOTelConfig(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: claudeops otel-config apply|status|remove")
+	}
+
+	p, err := config.Default()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(p.ConfigPath)
+	if err != nil {
+		return fmt.Errorf("otel-config: load config: %w", err)
+	}
+
+	settingsJSONPath := filepath.Join(os.Getenv("HOME"), ".claude", "settings.json")
+
+	switch args[0] {
+	case "apply":
+		if !cfg.Export.ClaudeOTel.Enabled {
+			return fmt.Errorf("claude_otel is disabled — set [export.claude_otel] enabled = true in config.toml")
+		}
+		if err := export.ApplyOTelConfig(settingsJSONPath, cfg.Export); err != nil {
+			return err
+		}
+		fmt.Printf("applied OTel config to %s\n", settingsJSONPath)
+		return nil
+	case "status":
+		status, err := export.StatusOTelConfig(settingsJSONPath)
+		if err != nil {
+			return err
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(w, "applied:\t%v\n", status.Applied)
+		for _, k := range export.ManagedOTelKeys {
+			if v, ok := status.Values[k]; ok {
+				fmt.Fprintf(w, "%s:\t%s\n", k, v)
+			}
+		}
+		return w.Flush()
+	case "remove":
+		if err := export.RemoveOTelConfig(settingsJSONPath); err != nil {
+			return err
+		}
+		fmt.Printf("removed OTel config from %s\n", settingsJSONPath)
+		return nil
+	default:
+		return fmt.Errorf("otel-config: unknown subcommand %q", args[0])
+	}
 }
