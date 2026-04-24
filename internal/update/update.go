@@ -52,7 +52,13 @@ func (OSRunner) GoEnv(ctx context.Context) (Env, error) {
 }
 
 func (OSRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// For `go install`, bypass the module proxy so we always get the latest
+	// tag directly from VCS — the proxy can serve a stale "latest" for minutes.
+	if name == "go" && len(args) > 0 && args[0] == "install" {
+		cmd.Env = append(os.Environ(), "GOPROXY=direct,https://proxy.golang.org,direct")
+	}
+	return cmd.CombinedOutput()
 }
 
 type Decision struct {
@@ -151,7 +157,45 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 		decision.InstalledNow = strings.TrimSpace(string(versionOut))
 	}
 
+	// Guard against the module proxy serving a stale (older) version.
+	// extractSemver parses "claudeops X.Y.Z" → "X.Y.Z".
+	if installedVer := extractSemver(decision.InstalledNow); installedVer != "" {
+		if semverLT(installedVer, u.Version) {
+			return decision, fmt.Errorf(
+				"update installed version %s which is older than current %s\n"+
+					"the module proxy cached a stale release — retry with:\n"+
+					"  GOPROXY=direct %s",
+				installedVer, u.Version, decision.InstallCommand)
+		}
+	}
+
 	return decision, nil
+}
+
+// extractSemver pulls the version string out of "claudeops X.Y.Z".
+func extractSemver(s string) string {
+	parts := strings.Fields(s)
+	if len(parts) >= 2 {
+		return parts[len(parts)-1]
+	}
+	return ""
+}
+
+// semverLT returns true when a < b (simple major.minor.patch comparison).
+func semverLT(a, b string) bool {
+	parse := func(v string) [3]int {
+		v = strings.TrimPrefix(v, "v")
+		var maj, min, pat int
+		fmt.Sscanf(v, "%d.%d.%d", &maj, &min, &pat)
+		return [3]int{maj, min, pat}
+	}
+	av, bv := parse(a), parse(b)
+	for i := range av {
+		if av[i] != bv[i] {
+			return av[i] < bv[i]
+		}
+	}
+	return false // equal is not less-than
 }
 
 func resolveOrClean(r Runner, path string) string {

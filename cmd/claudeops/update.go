@@ -21,6 +21,10 @@ func cmdUpdate() error {
 	}
 
 	if err == nil {
+		if decision.InstalledNow != "" && decision.InstalledNow == "claudeops "+version {
+			fmt.Println("already up to date")
+			return nil
+		}
 		fmt.Printf("update command: %s\n", decision.InstallCommand)
 		fmt.Println("update complete")
 		if decision.InstalledNow != "" {
