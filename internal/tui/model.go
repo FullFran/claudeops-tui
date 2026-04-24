@@ -558,9 +558,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.settingsInput.Focus()
 						return m, textinput.Blink
 					case item.actionKey == "push_now":
+						if !m.Settings.Export.Enabled {
+							m.statusMsg = "export disabled — toggle Enabled in the Export Metrics section first"
+							m.refreshViewport()
+							return m, nil
+						}
+						if m.Settings.Export.Endpoint == "" {
+							m.statusMsg = "no endpoint set — edit Endpoint in the Export Metrics section first"
+							m.refreshViewport()
+							return m, nil
+						}
 						m.statusMsg = "pushing…"
 						return m, m.pushNowCmd()
 					case item.actionKey == "apply_otel":
+						if !m.Settings.Export.ClaudeOTel.Enabled {
+							m.statusMsg = "claude_otel disabled — toggle Enabled in the Claude Code OTel section first"
+							m.refreshViewport()
+							return m, nil
+						}
+						if m.Settings.Export.Endpoint == "" {
+							m.statusMsg = "no endpoint set — edit Endpoint in the Export Metrics section first"
+							m.refreshViewport()
+							return m, nil
+						}
 						m.statusMsg = "applying OTel config…"
 						return m, m.applyOTelCmd()
 					}
