@@ -1,7 +1,12 @@
 package export
 
-// AggregationTemporalityDelta is the OTLP delta temporality value (proto3 enum 2).
-const AggregationTemporalityDelta = 2
+const (
+	// AggregationTemporalityCumulative is the OTLP proto3 enum value for cumulative sums.
+	// Prometheus expects cumulative counters — no delta→cumulative conversion needed.
+	AggregationTemporalityCumulative = 1
+	// AggregationTemporalityDelta kept for reference.
+	AggregationTemporalityDelta = 2
+)
 
 type exportRequest struct {
 	ResourceMetrics []ResourceMetric `json:"resourceMetrics"`

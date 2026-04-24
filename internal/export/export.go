@@ -66,25 +66,11 @@ func (p *Pusher) Push(ctx context.Context, opts PushOptions) (PushResult, error)
 		email = e
 	}
 
-	// Determine time window.
 	to := time.Now().Truncate(time.Second)
-	var from time.Time
-	switch {
-	case opts.Since != nil:
-		from = *opts.Since
-	default:
-		if v, ok, err := p.store.ConfigGet(ctx, "export.last_pushed_at"); err == nil && ok {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				from = t
-			}
-		}
-		if from.IsZero() {
-			from = to.Add(-30 * 24 * time.Hour)
-		}
-	}
 
-	// Query per-project aggregates.
-	rows, err := p.store.AggregatesByProjectBetween(ctx, from, to)
+	// Cumulative metrics: always query all-time totals so Prometheus sees
+	// monotonically increasing counters — no delta→cumulative conversion needed.
+	rows, err := p.store.AggregatesByProjectBetween(ctx, time.Time{}, to)
 	if err != nil {
 		return PushResult{}, fmt.Errorf("export: query aggregates: %w", err)
 	}
@@ -103,8 +89,10 @@ func (p *Pusher) Push(ctx context.Context, opts PushOptions) (PushResult, error)
 	}
 	resource := Resource{Attributes: resourceAttrs}
 
+	// StartTimeUnixNano uses Unix epoch — the natural start for cumulative counters.
+	epoch := time.Unix(0, 0).UTC()
 	scope := InstrumentationScope{Name: "claudeops", Version: "1"}
-	payload := buildPayload(resource, PeriodData{From: from, To: to, ByProject: rows}, scope)
+	payload := buildPayload(resource, PeriodData{From: epoch, To: to, ByProject: rows}, scope)
 
 	// Count data points.
 	dataPoints := 0
@@ -126,7 +114,7 @@ func (p *Pusher) Push(ctx context.Context, opts PushOptions) (PushResult, error)
 		if _, err := p.out.Write(b); err != nil {
 			return PushResult{}, fmt.Errorf("export: write dry-run: %w", err)
 		}
-		return PushResult{PeriodFrom: from, PeriodTo: to, DataPoints: dataPoints, DryRun: true}, nil
+		return PushResult{PeriodFrom: epoch, PeriodTo: to, DataPoints: dataPoints, DryRun: true}, nil
 	}
 
 	// Marshal and POST.
@@ -144,5 +132,5 @@ func (p *Pusher) Push(ctx context.Context, opts PushOptions) (PushResult, error)
 		log.Printf("export: save last_pushed_at: %v", err)
 	}
 
-	return PushResult{PeriodFrom: from, PeriodTo: to, DataPoints: dataPoints}, nil
+	return PushResult{PeriodFrom: epoch, PeriodTo: to, DataPoints: dataPoints}, nil
 }

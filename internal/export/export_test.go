@@ -111,7 +111,6 @@ func TestPusherFirstPush_NoLastPushedAt(t *testing.T) {
 		configData:  map[string]string{},
 		projectAggs: []store.ProjectPeriodAgg{{ProjectName: "myproj", CostEUR: 1.5, Sessions: 2}},
 	}
-	before := time.Now().Add(-31 * 24 * time.Hour)
 	p := New(fs, enabledCfg(srv.URL), &fakeCreds{email: "user@example.com"}, &http.Client{}, io.Discard)
 
 	result, err := p.Push(context.Background(), PushOptions{})
@@ -121,9 +120,9 @@ func TestPusherFirstPush_NoLastPushedAt(t *testing.T) {
 	if result.DryRun {
 		t.Error("expected DryRun=false")
 	}
-	// From should be approx 30 days ago
-	if fs.lastFrom.Before(before) {
-		t.Errorf("from time %v should be after %v (30d ago)", fs.lastFrom, before)
+	// Cumulative: always queries from zero time (all-time totals).
+	if !fs.lastFrom.IsZero() {
+		t.Errorf("cumulative push: from should be zero time, got %v", fs.lastFrom)
 	}
 	// last_pushed_at should be saved
 	if _, ok := fs.configData["export.last_pushed_at"]; !ok {
@@ -152,7 +151,7 @@ func TestPusherFirstPush_NoLastPushedAt(t *testing.T) {
 	}
 }
 
-func TestPusherSecondPush_UsesStoredLastPushedAt(t *testing.T) {
+func TestPusherSecondPush_AlwaysQueriesAllTime(t *testing.T) {
 	storedAt := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -169,9 +168,9 @@ func TestPusherSecondPush_UsesStoredLastPushedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Push() error: %v", err)
 	}
-	// from should match stored timestamp
-	if !fs.lastFrom.Equal(storedAt) {
-		t.Errorf("from = %v, want %v", fs.lastFrom, storedAt)
+	// Cumulative: stored last_pushed_at does NOT affect query window.
+	if !fs.lastFrom.IsZero() {
+		t.Errorf("cumulative push: from should always be zero time, got %v", fs.lastFrom)
 	}
 }
 
@@ -213,26 +212,23 @@ func TestPusherDryRun(t *testing.T) {
 	}
 }
 
-func TestPusherOptsSince_OverridesStoredLastPushedAt(t *testing.T) {
-	storedAt := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+func TestPusherCumulative_QueryFromAlwaysZero(t *testing.T) {
+	// Cumulative metrics always query from zero time regardless of opts.Since.
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	fs := &fakeStore{
-		configData: map[string]string{
-			"export.last_pushed_at": storedAt.Format(time.RFC3339),
-		},
-	}
+	fs := &fakeStore{configData: map[string]string{}}
 	p := New(fs, enabledCfg(srv.URL), &fakeCreds{}, &http.Client{}, io.Discard)
 	_, err := p.Push(context.Background(), PushOptions{Since: &since})
 	if err != nil {
 		t.Fatalf("Push() error: %v", err)
 	}
-	if !fs.lastFrom.Equal(since) {
-		t.Errorf("from = %v, want %v (opts.Since should override stored)", fs.lastFrom, since)
+	// Cumulative: query always uses all-time totals.
+	if !fs.lastFrom.IsZero() {
+		t.Errorf("from = %v, want zero time (cumulative ignores opts.Since for query)", fs.lastFrom)
 	}
 }
 

@@ -190,7 +190,7 @@ func TestBuildPayloadTimestampsAreDecimalStrings(t *testing.T) {
 	}
 }
 
-func TestBuildPayloadDeltaTemporalityAndMonotonic(t *testing.T) {
+func TestBuildPayloadCumulativeTemporalityAndMonotonic(t *testing.T) {
 	from := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
 	d := PeriodData{From: from, To: to}
@@ -203,9 +203,9 @@ func TestBuildPayloadDeltaTemporalityAndMonotonic(t *testing.T) {
 			t.Errorf("metric %q has nil Sum", m.Name)
 			continue
 		}
-		if m.Sum.AggregationTemporality != AggregationTemporalityDelta {
+		if m.Sum.AggregationTemporality != AggregationTemporalityCumulative {
 			t.Errorf("metric %q: AggregationTemporality want %d got %d",
-				m.Name, AggregationTemporalityDelta, m.Sum.AggregationTemporality)
+				m.Name, AggregationTemporalityCumulative, m.Sum.AggregationTemporality)
 		}
 		if !m.Sum.IsMonotonic {
 			t.Errorf("metric %q: IsMonotonic should be true", m.Name)

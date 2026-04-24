@@ -79,7 +79,7 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 			Unit: "EUR",
 			Sum: &Sum{
 				DataPoints:             costPoints,
-				AggregationTemporality: AggregationTemporalityDelta,
+				AggregationTemporality: AggregationTemporalityCumulative,
 				IsMonotonic:            true,
 			},
 		},
@@ -88,7 +88,7 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 			Unit: "{token}",
 			Sum: &Sum{
 				DataPoints:             allTokenPoints,
-				AggregationTemporality: AggregationTemporalityDelta,
+				AggregationTemporality: AggregationTemporalityCumulative,
 				IsMonotonic:            true,
 			},
 		},
@@ -97,7 +97,7 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 			Unit: "{session}",
 			Sum: &Sum{
 				DataPoints:             sessionPoints,
-				AggregationTemporality: AggregationTemporalityDelta,
+				AggregationTemporality: AggregationTemporalityCumulative,
 				IsMonotonic:            true,
 			},
 		},
