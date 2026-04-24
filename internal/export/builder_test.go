@@ -43,7 +43,7 @@ func TestBuildPayloadEmptyPeriodData(t *testing.T) {
 	for _, m := range sm.Metrics {
 		names[m.Name] = true
 	}
-	for _, want := range []string{"claudeops.cost.eur", "claudeops.tokens.total", "claudeops.sessions.count"} {
+	for _, want := range []string{"claudeops.cost.eur", "claudeops.tokens", "claudeops.sessions"} {
 		if !names[want] {
 			t.Errorf("missing metric %q", want)
 		}
@@ -90,9 +90,9 @@ func TestBuildPayloadNonZeroOneProject(t *testing.T) {
 		switch m.Name {
 		case "claudeops.cost.eur":
 			costMetric = m
-		case "claudeops.tokens.total":
+		case "claudeops.tokens":
 			tokenMetric = m
-		case "claudeops.sessions.count":
+		case "claudeops.sessions":
 			sessionMetric = m
 		}
 	}
@@ -256,8 +256,8 @@ func TestBuildPayloadMetricNames(t *testing.T) {
 
 	wantNames := []string{
 		"claudeops.cost.eur",
-		"claudeops.tokens.total",
-		"claudeops.sessions.count",
+		"claudeops.tokens",
+		"claudeops.sessions",
 	}
 	for i, m := range sm.Metrics {
 		if i >= len(wantNames) {
@@ -286,7 +286,7 @@ func TestBuildPayloadTokenTypeAttributeValues(t *testing.T) {
 
 	var tokenMetric *Metric
 	for i := range sm.Metrics {
-		if sm.Metrics[i].Name == "claudeops.tokens.total" {
+		if sm.Metrics[i].Name == "claudeops.tokens" {
 			tokenMetric = &sm.Metrics[i]
 			break
 		}

@@ -84,7 +84,7 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 			},
 		},
 		{
-			Name: "claudeops.tokens.total",
+			Name: "claudeops.tokens",
 			Unit: "{token}",
 			Sum: &Sum{
 				DataPoints:             allTokenPoints,
@@ -93,7 +93,7 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 			},
 		},
 		{
-			Name: "claudeops.sessions.count",
+			Name: "claudeops.sessions",
 			Unit: "{session}",
 			Sum: &Sum{
 				DataPoints:             sessionPoints,
