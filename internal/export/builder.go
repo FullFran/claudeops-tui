@@ -88,8 +88,8 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 
 	metrics := []Metric{
 		{
-			Name: "claudeops.cost.eur",
-			Unit: "EUR",
+			Name: "claudeops.cost",
+			Unit: "{EUR}",
 			Sum: &Sum{
 				DataPoints:             costPoints,
 				AggregationTemporality: AggregationTemporalityCumulative,
