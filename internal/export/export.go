@@ -92,7 +92,13 @@ func (p *Pusher) Push(ctx context.Context, opts PushOptions) (PushResult, error)
 	// StartTimeUnixNano uses Unix epoch — the natural start for cumulative counters.
 	epoch := time.Unix(0, 0).UTC()
 	scope := InstrumentationScope{Name: "claudeops", Version: "1"}
-	payload := buildPayload(resource, PeriodData{From: epoch, To: to, ByProject: rows}, scope)
+	payload := buildPayload(resource, PeriodData{
+		From:      epoch,
+		To:        to,
+		ByProject: rows,
+		UserName:  p.cfg.UserName,
+		TeamName:  p.cfg.TeamName,
+	}, scope)
 
 	// Count data points.
 	dataPoints := 0
