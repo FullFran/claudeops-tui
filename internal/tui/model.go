@@ -58,6 +58,7 @@ type Model struct {
 	HourlyGlobal         []store.HourlyAgg  // global per-hour aggregates for insights
 	Insights             []insights.Insight // computed insights
 	LiveSessions         []live.Session     // active Claude Code sessions for the Classroom tab
+	SourceAggs           []store.SourceAgg  // per-source cost/token breakdown (all-time)
 
 	// ui state
 	activeTab Tab
@@ -294,6 +295,7 @@ type refreshMsg struct {
 	hourlyGlobal         []store.HourlyAgg
 	computedInsights     []insights.Insight
 	liveSessions         []live.Session
+	sourceAggs           []store.SourceAgg
 }
 
 func currentSevenDayCycleWindow(snap *usage.Snapshot) (time.Time, time.Time, bool) {
@@ -344,6 +346,7 @@ func refreshCmd(m Model) tea.Cmd {
 				msg.burnRate4h = a.CostEUR / 4.0
 			}
 			msg.hourlyGlobal, _ = m.Store.GlobalHourlyAggregates(ctx, since7d)
+			msg.sourceAggs, _ = m.Store.AggregatesBySource(ctx, time.Time{})
 			msg.computedInsights = insights.Compute(insights.Input{
 				Last7d:       msg.last7d,
 				PerModel:     msg.perModel,
@@ -677,6 +680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.HourlyGlobal = msg.hourlyGlobal
 		m.Insights = msg.computedInsights
 		m.LiveSessions = msg.liveSessions
+		m.SourceAggs = msg.sourceAggs
 		m.refreshViewport()
 	}
 	// Forward unknown keys / scroll keys to the viewport for every tab.
