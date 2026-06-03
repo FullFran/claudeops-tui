@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,
     project_id  INTEGER NOT NULL REFERENCES projects(id),
     first_seen  TEXT NOT NULL,
-    last_seen   TEXT NOT NULL
+    last_seen   TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'claude'
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -33,7 +34,8 @@ CREATE TABLE IF NOT EXISTS events (
     cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
     cache_create_tokens   INTEGER NOT NULL DEFAULT 0,
     cost_eur              REAL,
-    task_id               TEXT REFERENCES tasks(id)
+    task_id               TEXT REFERENCES tasks(id),
+    source                TEXT NOT NULL DEFAULT 'claude'
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_ts        ON events(ts);
@@ -49,5 +51,10 @@ CREATE TABLE IF NOT EXISTS file_offsets (
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_watermarks (
+    source   TEXT PRIMARY KEY,
+    position TEXT NOT NULL
 );
 `

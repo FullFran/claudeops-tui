@@ -10,6 +10,15 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// SourceConfig describes one ingestion source.
+// A [[sources]] array in config.toml maps to this type.
+type SourceConfig struct {
+	Name    string `toml:"name"`    // "claude" | "codex" | "opencode"
+	Root    string `toml:"root"`    // path to scan/poll; empty uses the per-source default
+	Format  string `toml:"format"`  // "jsonl" | "sqlite" (informational, not enforced here)
+	Enabled bool   `toml:"enabled"` // whether to start a collector for this source
+}
+
 // Settings is the user-editable configuration loaded from
 // ~/.claudeops/config.toml. It controls which dashboard widgets are visible,
 // thresholds for color-coding, calendar defaults, and key bindings.
@@ -25,6 +34,21 @@ type Settings struct {
 	Usage       UsageSettings       `toml:"usage"`
 	Insights    InsightsSettings    `toml:"insights"`
 	Export      ExportSettings      `toml:"export"`
+	// Sources is the per-source ingestion config. When absent (nil or empty),
+	// SourceConfigs() returns the default (claude only, enabled).
+	Sources []SourceConfig `toml:"sources"`
+}
+
+// SourceConfigs returns the effective source configuration.
+// When Sources is empty (default config), it returns a single claude entry.
+// When Sources is non-empty, it returns Sources as-is.
+func (s Settings) SourceConfigs() []SourceConfig {
+	if len(s.Sources) == 0 {
+		return []SourceConfig{
+			{Name: "claude", Enabled: true, Format: "jsonl"},
+		}
+	}
+	return s.Sources
 }
 
 // ExportSettings controls telemetry export via OTLP.
