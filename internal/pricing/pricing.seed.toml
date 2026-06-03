@@ -3,25 +3,34 @@
 # Prices are in EUR per 1,000,000 tokens, split into the four token classes
 # Anthropic charges separately. Edit this file as Anthropic updates pricing.
 #
-# Source: https://www.anthropic.com/pricing  (verify before trusting € numbers)
+# Source: https://platform.claude.com/docs/en/about-claude/pricing  (verify before trusting € numbers)
 # Currency: EUR.  Adjust if you want USD — the calculator does not convert.
+# EUR figures are USD list price x 0.92.
 #
-# updated: 2026-04-08
+# updated: 2026-06-03
 
-updated = "2026-04-17"
+updated = "2026-06-03"
 currency = "EUR"
 
+# Opus 4.5+ tier: $5 in / $25 out / $0.50 cache-read / $6.25 cache-write(5m).
+# Anthropic cut Opus pricing at 4.5 and it has held steady through 4.8.
+[models."claude-opus-4-8"]
+input         =  4.60
+output        = 23.00
+cache_read    =  0.46
+cache_create  =  5.75
+
 [models."claude-opus-4-7"]
-input         = 13.80
-output        = 69.00
-cache_read    =  1.38
-cache_create  = 17.25
+input         =  4.60
+output        = 23.00
+cache_read    =  0.46
+cache_create  =  5.75
 
 [models."claude-opus-4-6"]
-input         = 13.80
-output        = 69.00
-cache_read    =  1.38
-cache_create  = 17.25
+input         =  4.60
+output        = 23.00
+cache_read    =  0.46
+cache_create  =  5.75
 
 [models."claude-sonnet-4-6"]
 input         =  2.76
@@ -30,17 +39,17 @@ cache_read    =  0.276
 cache_create  =  3.45
 
 [models."claude-haiku-4-5-20251001"]
-input         =  0.736
-output        =  3.68
-cache_read    =  0.0736
-cache_create  =  0.92
+input         =  0.92
+output        =  4.60
+cache_read    =  0.092
+cache_create  =  1.15
 
 # Aliases — Claude Code occasionally reports short model names.
 [models."claude-opus-4"]
-input         = 13.80
-output        = 69.00
-cache_read    =  1.38
-cache_create  = 17.25
+input         =  4.60
+output        = 23.00
+cache_read    =  0.46
+cache_create  =  5.75
 
 [models."claude-sonnet-4"]
 input         =  2.76
@@ -49,7 +58,7 @@ cache_read    =  0.276
 cache_create  =  3.45
 
 [models."claude-haiku-4-5"]
-input         =  0.736
-output        =  3.68
-cache_read    =  0.0736
-cache_create  =  0.92
+input         =  0.92
+output        =  4.60
+cache_read    =  0.092
+cache_create  =  1.15

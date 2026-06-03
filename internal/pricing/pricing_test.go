@@ -108,7 +108,7 @@ cache_create = 66.0
 	if _, ok := tbl.Models["claude-opus-4-7"]; !ok {
 		t.Fatal("missing merged seed model claude-opus-4-7")
 	}
-	if tbl.Updated != "2026-04-17" {
+	if tbl.Updated != "2026-06-03" {
 		t.Fatalf("updated = %q, want seed date after merge", tbl.Updated)
 	}
 
@@ -121,6 +121,59 @@ cache_create = 66.0
 	}
 	if reloaded.Models["claude-opus-4-6"].Input != 99.0 {
 		t.Fatalf("persisted custom value lost: %+v", reloaded.Models["claude-opus-4-6"])
+	}
+}
+
+func TestLoadOrSeedCorrectsStaleShippedPricesButNotCustomizedOnes(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "pricing.toml")
+
+	// An existing install from an older claudeops: opus-4-7 still at the wrong
+	// $15/$75 tier we shipped, plus opus-4-6 the user customized themselves.
+	const old = `
+updated = "2026-04-17"
+currency = "EUR"
+
+[models."claude-opus-4-7"]
+input        = 13.80
+output       = 69.00
+cache_read   =  1.38
+cache_create = 17.25
+
+[models."claude-opus-4-6"]
+input        = 50.0
+output       = 50.0
+cache_read   =  5.0
+cache_create =  5.0
+`
+	if err := os.WriteFile(p, []byte(strings.TrimSpace(old)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tbl, err := LoadOrSeed(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale shipped value is corrected to the current seed price.
+	if got := tbl.Models["claude-opus-4-7"]; got.Input != 4.60 || got.Output != 23.00 {
+		t.Fatalf("stale opus-4-7 not corrected: %+v", got)
+	}
+	// Customized value is preserved (it does not match the known-wrong value).
+	if got := tbl.Models["claude-opus-4-6"]; got.Input != 50.0 || got.Output != 50.0 {
+		t.Fatalf("customized opus-4-6 overwritten: %+v", got)
+	}
+
+	// Correction is persisted to disk.
+	reloaded, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Models["claude-opus-4-7"].Input != 4.60 {
+		t.Fatalf("correction not persisted: %+v", reloaded.Models["claude-opus-4-7"])
+	}
+	if reloaded.Models["claude-opus-4-6"].Input != 50.0 {
+		t.Fatalf("customized value lost after persist: %+v", reloaded.Models["claude-opus-4-6"])
 	}
 }
 
