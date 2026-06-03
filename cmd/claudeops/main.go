@@ -16,12 +16,16 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/fullfran/claudeops-tui/internal/codex"
 	"github.com/fullfran/claudeops-tui/internal/collector"
 	"github.com/fullfran/claudeops-tui/internal/config"
 	"github.com/fullfran/claudeops-tui/internal/export"
 	"github.com/fullfran/claudeops-tui/internal/hooks"
 	"github.com/fullfran/claudeops-tui/internal/mcpserver"
+	ocingester "github.com/fullfran/claudeops-tui/internal/opencode"
+	"github.com/fullfran/claudeops-tui/internal/parser"
 	"github.com/fullfran/claudeops-tui/internal/pricing"
+	"github.com/fullfran/claudeops-tui/internal/source"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
 	"github.com/fullfran/claudeops-tui/internal/tui"
@@ -147,6 +151,69 @@ func openCore() (config.Paths, *store.Store, *pricing.Calculator, *tasks.Tracker
 	return p, s, calc, tr, nil
 }
 
+// buildCollectors creates one Collector per enabled line-based source from the
+// given config. claudeRoot is the fallback root for the claude source when
+// SourceConfig.Root is empty. The opencode DB-poller source is handled separately
+// by buildOpencodeIngester — it does NOT go through the Collector machinery.
+func buildCollectors(sources []config.SourceConfig, sk source.Sink, claudeRoot string) []*collector.Collector {
+	var cols []*collector.Collector
+	for _, sc := range sources {
+		if !sc.Enabled {
+			continue
+		}
+		root := sc.Root
+		switch sc.Name {
+		case "claude":
+			if root == "" {
+				root = claudeRoot
+			}
+			lp := parser.ClaudeLineParser{}
+			cols = append(cols, collector.NewWithSource(source.Claude, root, sk, lp, nil))
+		case "codex":
+			if root == "" {
+				root = codex.CodexRoot()
+			}
+			lp := codex.NewParser()
+			cols = append(cols, collector.NewWithSource(source.Codex, root, sk, lp, nil))
+		case "opencode":
+			// opencode is a DB-poller, not a Collector. Handled by buildOpencodeIngester.
+		default:
+			fmt.Fprintf(os.Stderr, "claudeops: source %q not yet implemented, skipping\n", sc.Name)
+		}
+	}
+	return cols
+}
+
+// opencodeDefaultDBPath returns the conventional path to the opencode SQLite DB.
+// It mirrors how opencode itself resolves its data directory.
+func opencodeDefaultDBPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+}
+
+// buildOpencodeIngester builds an opencode Ingester when the opencode source is
+// enabled in sources, or returns nil if it is absent or disabled.
+// s is the claudeops store (used for watermark persistence).
+func buildOpencodeIngester(sources []config.SourceConfig, s *store.Store, sk source.Sink) source.Ingester {
+	for _, sc := range sources {
+		if sc.Name != "opencode" {
+			continue
+		}
+		if !sc.Enabled {
+			return nil
+		}
+		dbPath := sc.Root
+		if dbPath == "" {
+			dbPath = opencodeDefaultDBPath()
+		}
+		return ocingester.NewIngester(dbPath, s, sk)
+	}
+	return nil
+}
+
 func cmdTUI() error {
 	p, s, calc, tr, err := openCore()
 	if err != nil {
@@ -166,14 +233,32 @@ func cmdTUI() error {
 		uClient.CacheTTL = time.Duration(settings.Usage.CacheTTLSeconds) * time.Second
 	}
 
-	// Embedded collector goroutine.
-	col := collector.New(p.ClaudeProjects, s, calc, tr)
+	// Build multi-collector using source seam. Default: claude only.
+	sink := source.NewStoreSinkWithTasks(s, calc, tr)
+	srcs := settings.SourceConfigs()
+	cols := buildCollectors(srcs, sink, p.ClaudeProjects)
+	// Fallback to legacy collector if no source-seam collectors were built.
+	if len(cols) == 0 {
+		cols = append(cols, collector.New(p.ClaudeProjects, s, calc, tr))
+	}
+
+	// opencode DB-poller: independent of the Collector loop.
+	ocIng := buildOpencodeIngester(srcs, s, sink)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() {
-		// Best-effort: cold ingest, then watch.
-		_ = col.Watch(ctx)
-	}()
+	for _, col := range cols {
+		col := col // capture
+		go func() {
+			// Best-effort: cold ingest, then watch.
+			_ = col.Watch(ctx)
+		}()
+	}
+	if ocIng != nil {
+		go func() {
+			_ = ocIng.Watch(ctx)
+		}()
+	}
 
 	model := tui.NewWithSettings(s, uClient, tr, settings, calc.Updated(), version)
 	model.ConfigPath = p.ConfigPath

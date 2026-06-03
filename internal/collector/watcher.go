@@ -33,7 +33,7 @@ func (c *Collector) Watch(ctx context.Context) error {
 		if len(dirty) == 0 {
 			return
 		}
-		offsets, _ := c.store.LoadOffsets()
+		offsets, _ := c.loadOffsets()
 		for p := range dirty {
 			_ = c.ingestFile(ctx, p, offsets[p])
 		}

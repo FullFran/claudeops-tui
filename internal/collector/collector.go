@@ -17,6 +17,7 @@ import (
 
 	"github.com/fullfran/claudeops-tui/internal/parser"
 	"github.com/fullfran/claudeops-tui/internal/pricing"
+	"github.com/fullfran/claudeops-tui/internal/source"
 	"github.com/fullfran/claudeops-tui/internal/store"
 )
 
@@ -39,6 +40,11 @@ type Collector struct {
 	calc  *pricing.Calculator
 	tasks TaskResolver
 
+	// source seam fields (set by NewWithSource; nil when using legacy New)
+	sourceName source.Name
+	sink       source.Sink
+	lineParser source.LineParser
+
 	// counters for diagnostics
 	parseErrors atomic.Int64
 	unknown     atomic.Int64
@@ -48,7 +54,9 @@ type Collector struct {
 	watching map[string]bool // file path → true
 }
 
-// New builds a Collector. `root` is typically ~/.claude/projects.
+// New builds a Collector using the classic direct-store path.
+// `root` is typically ~/.claude/projects.
+// This constructor is preserved for backward compatibility.
 func New(root string, s *store.Store, calc *pricing.Calculator, tr TaskResolver) *Collector {
 	if tr == nil {
 		tr = nopResolver{}
@@ -59,6 +67,24 @@ func New(root string, s *store.Store, calc *pricing.Calculator, tr TaskResolver)
 		calc:     calc,
 		tasks:    tr,
 		watching: map[string]bool{},
+	}
+}
+
+// NewWithSource builds a source-aware Collector.
+// All event processing goes through lp (LineParser) and sk (Sink).
+// The store is still used for offset persistence; pricing and insert logic
+// live behind the Sink. tr may be nil.
+func NewWithSource(name source.Name, root string, sk source.Sink, lp source.LineParser, tr TaskResolver) *Collector {
+	if tr == nil {
+		tr = nopResolver{}
+	}
+	return &Collector{
+		root:       root,
+		sourceName: name,
+		sink:       sk,
+		lineParser: lp,
+		tasks:      tr,
+		watching:   map[string]bool{},
 	}
 }
 
@@ -74,7 +100,7 @@ func (c *Collector) UnknownCount() int64 { return c.unknown.Load() }
 // IngestExisting walks `root` once and ingests every JSONL file found,
 // honoring persisted offsets so it can be called repeatedly.
 func (c *Collector) IngestExisting(ctx context.Context) error {
-	offsets, err := c.store.LoadOffsets()
+	offsets, err := c.loadOffsets()
 	if err != nil {
 		return err
 	}
@@ -90,6 +116,32 @@ func (c *Collector) IngestExisting(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+// loadOffsets returns persisted byte offsets per file.
+// When using the source seam (sink+lineParser), the Collector may not have a
+// store directly; in that case we need a way to persist offsets. We extract the
+// store from the StoreSink if possible, or fall back to an empty map (stateless).
+func (c *Collector) loadOffsets() (map[string]int64, error) {
+	if c.store != nil {
+		return c.store.LoadOffsets()
+	}
+	// Source-seam path: extract store from StoreSink if available.
+	if ss, ok := c.sink.(*source.StoreSink); ok {
+		return ss.Store().LoadOffsets()
+	}
+	return map[string]int64{}, nil
+}
+
+// saveOffset persists how many bytes have been processed from a file.
+func (c *Collector) saveOffset(path string, offset, size int64) error {
+	if c.store != nil {
+		return c.store.SaveOffset(path, offset, size)
+	}
+	if ss, ok := c.sink.(*source.StoreSink); ok {
+		return ss.Store().SaveOffset(path, offset, size)
+	}
+	return nil // stateless sink; silently ignore
 }
 
 // ingestFile reads from `start` to EOF, parses each line, and persists offsets.
@@ -114,8 +166,9 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 		}
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
+			lineStart := off
 			off += int64(len(line))
-			c.handleLine(ctx, line)
+			c.handleLine(ctx, path, lineStart, line)
 		}
 		if errors.Is(err, io.EOF) {
 			break
@@ -129,10 +182,10 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 	if stat != nil {
 		size = stat.Size()
 	}
-	return c.store.SaveOffset(path, off, size)
+	return c.saveOffset(path, off, size)
 }
 
-func (c *Collector) handleLine(ctx context.Context, line []byte) {
+func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64, line []byte) {
 	// strip trailing newline before parsing
 	for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
 		line = line[:len(line)-1]
@@ -140,6 +193,31 @@ func (c *Collector) handleLine(ctx context.Context, line []byte) {
 	if len(line) == 0 {
 		return
 	}
+
+	// Source-seam path: use LineParser + Sink.
+	if c.lineParser != nil && c.sink != nil {
+		lctx := source.LineContext{
+			Path:       path,
+			LineOffset: lineStart,
+		}
+		records, err := c.lineParser.ParseLine(line, lctx)
+		if err != nil {
+			c.parseErrors.Add(1)
+			return
+		}
+		for _, r := range records {
+			if err := c.sink.Emit(ctx, r); err == nil {
+				c.ingested.Add(1)
+			}
+		}
+		if len(records) == 0 {
+			// Unknown/no-usage line — count as unknown.
+			c.unknown.Add(1)
+		}
+		return
+	}
+
+	// Legacy path: direct parser + store (unchanged behavior).
 	ev, err := parser.ParseLine(line)
 	if err != nil {
 		c.parseErrors.Add(1)
