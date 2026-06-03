@@ -174,6 +174,16 @@ func renderDashboardTab(m Model) string {
 		}
 	}
 
+	if len(m.SourceAggs) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString(headerStyle.Render("By source") + "\n")
+		for _, ag := range m.SourceAggs {
+			costStyled := colorForSpend(ag.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.4f", ag.CostEUR))
+			sb.WriteString(fmt.Sprintf("  %-12s  events: %d   %s\n",
+				ag.Source, ag.Events, costStyled))
+		}
+	}
+
 	return sb.String()
 }
 

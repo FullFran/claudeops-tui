@@ -42,7 +42,11 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 	}
 
 	for _, p := range d.ByProject {
-		attrs := append(append([]KeyValue{}, baseAttrs...), strAttr("project", p.ProjectName))
+		projectAttrs := []KeyValue{strAttr("project", p.ProjectName)}
+		if p.Source != "" {
+			projectAttrs = append(projectAttrs, strAttr("source", p.Source))
+		}
+		attrs := append(append([]KeyValue{}, baseAttrs...), projectAttrs...)
 
 		cost := p.CostEUR
 		costPoints = append(costPoints, NumberDataPoint{
