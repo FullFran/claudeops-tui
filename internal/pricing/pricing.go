@@ -59,12 +59,50 @@ func LoadOrSeed(path string) (*Table, error) {
 		return nil, err
 	}
 	merged, changed := mergeMissingModels(current, seed)
-	if changed {
+	corrected := correctStalePrices(merged, seed)
+	if corrected && seed.Updated != "" {
+		merged.Updated = seed.Updated
+	}
+	if changed || corrected {
 		if err := os.WriteFile(path, encodeTable(merged), 0o644); err != nil {
 			return nil, err
 		}
 	}
 	return merged, nil
+}
+
+// staleSeedPrices lists per-model values we shipped incorrectly in earlier
+// seeds (the pre-4.5 Opus tier at $15/$75, and Haiku 4.5 priced as Haiku 3.5).
+// On load we replace a user's value ONLY if it still exactly matches the wrong
+// value we shipped — i.e. the user never customized it. Any other value is
+// treated as a deliberate customization and left untouched.
+var staleSeedPrices = map[string]ModelPrice{
+	"claude-opus-4-7":           {Input: 13.80, Output: 69.00, CacheRead: 1.38, CacheCreate: 17.25},
+	"claude-opus-4-6":           {Input: 13.80, Output: 69.00, CacheRead: 1.38, CacheCreate: 17.25},
+	"claude-opus-4":             {Input: 13.80, Output: 69.00, CacheRead: 1.38, CacheCreate: 17.25},
+	"claude-haiku-4-5-20251001": {Input: 0.736, Output: 3.68, CacheRead: 0.0736, CacheCreate: 0.92},
+	"claude-haiku-4-5":          {Input: 0.736, Output: 3.68, CacheRead: 0.0736, CacheCreate: 0.92},
+}
+
+// correctStalePrices overwrites any model whose local value still equals the
+// known-wrong shipped value with the current seed price, so existing installs
+// pick up corrections that mergeMissingModels (add-only) would otherwise miss.
+// Returns true if any model was corrected.
+func correctStalePrices(current, seed *Table) bool {
+	changed := false
+	for name, wrong := range staleSeedPrices {
+		cur, ok := current.Models[name]
+		if !ok || cur != wrong {
+			continue
+		}
+		newv, ok := seed.Models[name]
+		if !ok {
+			continue
+		}
+		current.Models[name] = newv
+		changed = true
+	}
+	return changed
 }
 
 func parse(b []byte) (*Table, error) {
