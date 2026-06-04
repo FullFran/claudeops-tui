@@ -32,7 +32,7 @@ import (
 	"github.com/fullfran/claudeops-tui/internal/usage"
 )
 
-const version = "0.2.3"
+const version = "0.3.0"
 
 func main() {
 	if err := run(); err != nil {
