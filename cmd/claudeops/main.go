@@ -45,6 +45,7 @@ var (
 	runMCPCommand        = cmdMCP
 	runTaskCommand       = cmdTask
 	runIngestCommand     = cmdIngest
+	runReingestCommand   = cmdReingest
 	runUpdateCommand     = cmdUpdate
 	runHooksCommand      = cmdHooks
 	runPushCommand       = cmdPush
@@ -69,6 +70,8 @@ func runArgs(args []string) error {
 		return runTaskCommand(args[1:])
 	case "ingest":
 		return runIngestCommand()
+	case "reingest":
+		return runReingestCommand(args[1:])
 	case "update":
 		return runUpdateCommand()
 	case "hooks":
@@ -95,6 +98,7 @@ Usage:
   claudeops task stop                           stop the current task
   claudeops task list                           list all tasks
   claudeops ingest                              one-shot ingest of existing JSONL files
+  claudeops reingest [--yes]                    rebuild the event store from source files (corrects pre-0.4 inflated usage)
   claudeops update                              update the installed CLI
   claudeops hooks install                       register Claude Code hooks for live status
   claudeops hooks uninstall                     remove claudeops hooks from settings.json
@@ -270,21 +274,85 @@ func cmdTUI() error {
 }
 
 func cmdIngest() error {
-	_, s, calc, tr, err := openCore()
+	p, s, calc, tr, err := openCore()
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	p, _ := config.Default()
-	col := collector.New(p.ClaudeProjects, s, calc, tr)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	if err := col.IngestExisting(ctx); err != nil {
+	ing, unk, perr := ingestAllSources(ctx, p, s, calc, tr)
+	fmt.Printf("ingested: %d   unknown: %d   parse_errors: %d\n", ing, unk, perr)
+	return nil
+}
+
+// cmdReingest clears the derived event store and rebuilds it from the source
+// files. Pre-0.4 installs stored one inflated row per assistant content block;
+// re-ingesting under the corrected dedup key produces accurate all-time usage.
+// Tasks and config are preserved. Destructive to the event store, so it
+// confirms first unless --yes is passed.
+func cmdReingest(args []string) error {
+	fs := flag.NewFlagSet("reingest", flag.ContinueOnError)
+	yes := fs.Bool("yes", false, "skip the confirmation prompt")
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	fmt.Printf("ingested: %d   unknown: %d   parse_errors: %d\n",
-		col.IngestedCount(), col.UnknownCount(), col.ParseErrorCount())
+
+	p, s, calc, tr, err := openCore()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if !*yes {
+		fmt.Print("This clears the local event store and rebuilds it from source files\n" +
+			"(tasks and config are kept). Continue? [y/N] ")
+		var resp string
+		_, _ = fmt.Scanln(&resp)
+		if resp != "y" && resp != "Y" && resp != "yes" {
+			fmt.Println("aborted")
+			return nil
+		}
+	}
+
+	if err := s.ResetIngestedData(ctx); err != nil {
+		return fmt.Errorf("reset: %w", err)
+	}
+	ing, unk, perr := ingestAllSources(ctx, p, s, calc, tr)
+	fmt.Printf("reingested: %d   unknown: %d   parse_errors: %d\n", ing, unk, perr)
 	return nil
+}
+
+// ingestAllSources runs a one-shot cold ingest of every enabled source
+// (claude + codex collectors, plus the opencode DB poller) and returns the
+// aggregate ingested / unknown / parse-error counts. It mirrors the cold-ingest
+// pass cmdTUI runs on startup, so CLI ingest and the TUI agree on coverage.
+func ingestAllSources(ctx context.Context, p config.Paths, s *store.Store, calc *pricing.Calculator, tr *tasks.Tracker) (ingested, unknown, parseErrors int64) {
+	sink := source.NewStoreSinkWithTasks(s, calc, tr)
+	srcs := config.DefaultSettings().SourceConfigs()
+	if settings, err := config.LoadOrCreate(p.ConfigPath); err == nil {
+		srcs = settings.SourceConfigs()
+	}
+	cols := buildCollectors(srcs, sink, p.ClaudeProjects)
+	if len(cols) == 0 {
+		cols = append(cols, collector.New(p.ClaudeProjects, s, calc, tr))
+	}
+	for _, col := range cols {
+		if err := col.IngestExisting(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "claudeops: ingest: %v\n", err)
+		}
+		ingested += col.IngestedCount()
+		unknown += col.UnknownCount()
+		parseErrors += col.ParseErrorCount()
+	}
+	if ocIng := buildOpencodeIngester(srcs, s, sink); ocIng != nil {
+		if err := ocIng.IngestExisting(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "claudeops: opencode ingest: %v\n", err)
+		}
+	}
+	return ingested, unknown, parseErrors
 }
 
 func cmdTask(args []string) error {

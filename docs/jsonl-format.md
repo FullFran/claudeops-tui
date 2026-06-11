@@ -24,6 +24,12 @@ Files are append-only. One JSON object per line. Lines may be very long (full as
 
 The parser MUST be permissive: future Claude Code releases will introduce new types. Unknown types are returned as `UnknownEvent` and skipped, never crash.
 
+## One assistant message spans multiple lines (dedup)
+
+Claude Code writes **one JSONL line per content block** of an assistant message. Each line has a distinct `uuid`, but the lines of one API call share the same `message.id` (`msg_*`) and top-level `requestId` (`req_*`). The `message.usage` `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` are identical across those lines; **`output_tokens` grows monotonically** (the streaming partial count, then the final count on the last line).
+
+Counting one row per line over-counts usage ~2.4x. The parser therefore keys assistant events by `message.id[:requestId]` (falling back to the line `uuid` when no `message.id` is present), and the store collapses them with `ON CONFLICT(uuid) DO UPDATE` keeping the row with the **largest `output_tokens`** (and its cost). The result is exactly one row per API call carrying the final token counts.
+
 ## Universal fields
 
 Every event line carries (at minimum):

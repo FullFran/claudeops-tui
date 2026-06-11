@@ -21,6 +21,23 @@ func TestRunArgsDispatchesUpdateCommand(t *testing.T) {
 	}
 }
 
+func TestRunArgsDispatchesReingestCommand(t *testing.T) {
+	var gotArgs []string
+	prev := runReingestCommand
+	runReingestCommand = func(args []string) error {
+		gotArgs = args
+		return nil
+	}
+	defer func() { runReingestCommand = prev }()
+
+	if err := runArgs([]string{"reingest", "--yes"}); err != nil {
+		t.Fatalf("runArgs(reingest): %v", err)
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != "--yes" {
+		t.Fatalf("expected reingest to receive [--yes], got %v", gotArgs)
+	}
+}
+
 func TestRunArgsDispatchesPushCommand(t *testing.T) {
 	called := false
 	prev := runPushCommand

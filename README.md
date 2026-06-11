@@ -108,6 +108,7 @@ claudeops task start "refactor parser"
 claudeops task stop
 claudeops task list
 claudeops ingest                # one-shot ingest of existing JSONL
+claudeops reingest              # rebuild the event store from source files (run once after upgrading to 0.4+)
 claudeops update                # update the installed CLI when safe
 claudeops version
 ```
