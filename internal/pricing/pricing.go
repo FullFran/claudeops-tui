@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -199,8 +200,17 @@ func NewCalculator(t *Table) *Calculator {
 
 // CostFor computes the EUR cost for an event with the given token classes.
 // Returns nil if the model is unknown (and triggers OnWarn once).
+//
+// Model IDs with a bracket suffix — e.g. "claude-fable-5[1m]", the 1M-context
+// variant Claude Code reports — fall back to the base ID's price when no
+// explicit entry exists for the suffixed form.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
 	mp, ok := c.t.Models[model]
+	if !ok {
+		if i := strings.IndexByte(model, '['); i > 0 && strings.HasSuffix(model, "]") {
+			mp, ok = c.t.Models[model[:i]]
+		}
+	}
 	if !ok {
 		c.mu.Lock()
 		if !c.missing[model] {

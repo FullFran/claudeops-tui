@@ -83,8 +83,13 @@ Treating cache reads as full input → overcost by ~10×. Ignoring cache creatio
 
 ## Models observed
 
-- `claude-opus-4-6`
+- `claude-fable-5` (also as `claude-fable-5[1m]` — 1M-context variant)
+- `claude-opus-4-8` / `claude-opus-4-7` / `claude-opus-4-6` (also `claude-opus-4-8[1m]`)
 - `claude-sonnet-4-6`
 - `claude-haiku-4-5-20251001`
+- Family aliases: `opus`, `sonnet`, `haiku`
+- `<synthetic>` — Claude Code synthetic events, no real API usage
 
-Pricing seed in `configs/pricing.toml` ships with these. Unknown models leave `cost_eur` NULL and warn once.
+Pricing seed in `internal/pricing/pricing.seed.toml` ships with these. Bracket
+suffixes (`[1m]`) fall back to the base model's price when no explicit entry
+exists. Unknown models leave `cost_eur` NULL and warn once.

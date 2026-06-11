@@ -7,10 +7,20 @@
 # Currency: EUR.  Adjust if you want USD — the calculator does not convert.
 # EUR figures are USD list price x 0.92.
 #
-# updated: 2026-06-03
+# updated: 2026-06-10
 
-updated = "2026-06-03"
+updated = "2026-06-10"
 currency = "EUR"
+
+# Fable 5 tier: $10 in / $50 out / $1.00 cache-read / $12.50 cache-write(5m).
+# New top tier above Opus. Claude Code may report it with a context-window
+# suffix ("claude-fable-5[1m]"); the calculator strips bracket suffixes and
+# falls back to this entry.
+[models."claude-fable-5"]
+input         =  9.20
+output        = 46.00
+cache_read    =  0.92
+cache_create  = 11.50
 
 # Opus 4.5+ tier: $5 in / $25 out / $0.50 cache-read / $6.25 cache-write(5m).
 # Anthropic cut Opus pricing at 4.5 and it has held steady through 4.8.
@@ -58,6 +68,26 @@ cache_read    =  0.276
 cache_create  =  3.45
 
 [models."claude-haiku-4-5"]
+input         =  0.92
+output        =  4.60
+cache_read    =  0.092
+cache_create  =  1.15
+
+# Family-name aliases — Claude Code reports these when the user picks a model
+# by family ("opus", "sonnet", "haiku"). Priced as the current generation.
+[models."opus"]
+input         =  4.60
+output        = 23.00
+cache_read    =  0.46
+cache_create  =  5.75
+
+[models."sonnet"]
+input         =  2.76
+output        = 13.80
+cache_read    =  0.276
+cache_create  =  3.45
+
+[models."haiku"]
 input         =  0.92
 output        =  4.60
 cache_read    =  0.092

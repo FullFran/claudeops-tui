@@ -108,8 +108,12 @@ cache_create = 66.0
 	if _, ok := tbl.Models["claude-opus-4-7"]; !ok {
 		t.Fatal("missing merged seed model claude-opus-4-7")
 	}
-	if tbl.Updated != "2026-06-03" {
-		t.Fatalf("updated = %q, want seed date after merge", tbl.Updated)
+	seed, err := parse(SeedTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Updated != seed.Updated {
+		t.Fatalf("updated = %q, want seed date %q after merge", tbl.Updated, seed.Updated)
 	}
 
 	reloaded, err := Load(p)
@@ -174,6 +178,104 @@ cache_create =  5.0
 	}
 	if reloaded.Models["claude-opus-4-6"].Input != 50.0 {
 		t.Fatalf("customized value lost after persist: %+v", reloaded.Models["claude-opus-4-6"])
+	}
+}
+
+func TestSeedIncludesCurrentAnthropicLineup(t *testing.T) {
+	tbl, err := parse(SeedTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// EUR = USD list price x 0.92.
+	cases := []struct {
+		model string
+		want  ModelPrice
+	}{
+		{"claude-fable-5", ModelPrice{Input: 9.20, Output: 46.00, CacheRead: 0.92, CacheCreate: 11.50}},
+		{"claude-opus-4-8", ModelPrice{Input: 4.60, Output: 23.00, CacheRead: 0.46, CacheCreate: 5.75}},
+		{"claude-sonnet-4-6", ModelPrice{Input: 2.76, Output: 13.80, CacheRead: 0.276, CacheCreate: 3.45}},
+		{"claude-haiku-4-5", ModelPrice{Input: 0.92, Output: 4.60, CacheRead: 0.092, CacheCreate: 1.15}},
+		// Short aliases Claude Code reports when the user selects a model by
+		// family name; priced as the current generation of that family.
+		{"opus", ModelPrice{Input: 4.60, Output: 23.00, CacheRead: 0.46, CacheCreate: 5.75}},
+		{"sonnet", ModelPrice{Input: 2.76, Output: 13.80, CacheRead: 0.276, CacheCreate: 3.45}},
+		{"haiku", ModelPrice{Input: 0.92, Output: 4.60, CacheRead: 0.092, CacheCreate: 1.15}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			got, ok := tbl.Models[tc.model]
+			if !ok {
+				t.Fatalf("seed missing model %q", tc.model)
+			}
+			if got != tc.want {
+				t.Errorf("seed price for %q = %+v, want %+v", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCostForFallsBackToBaseModelForBracketSuffix(t *testing.T) {
+	const table = `
+updated = "2026-06-10"
+currency = "EUR"
+
+[models."claude-fable-5"]
+input        =  9.20
+output       = 46.00
+cache_read   =  0.92
+cache_create = 11.50
+
+[models."claude-opus-4-8[1m]"]
+input        =  1.00
+output       =  2.00
+cache_read   =  3.00
+cache_create =  4.00
+`
+	tbl, err := parse([]byte(table))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name    string
+		model   string
+		want    *float64 // nil = unknown
+		wantVal float64
+	}{
+		{name: "exact id still matches", model: "claude-fable-5", wantVal: 9.20},
+		{name: "bracket suffix falls back to base id", model: "claude-fable-5[1m]", wantVal: 9.20},
+		{name: "explicit bracket entry wins over fallback", model: "claude-opus-4-8[1m]", wantVal: 1.00},
+		{name: "unknown base id stays unknown", model: "claude-zaphod-9[1m]", want: nil},
+		{name: "leading bracket is not stripped", model: "[1m]claude-fable-5", want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCalculator(tbl)
+			warned := ""
+			c.OnWarn = func(m string) { warned = m }
+
+			got := c.CostFor(tc.model, 1_000_000, 0, 0, 0)
+			unknown := tc.want == nil && tc.wantVal == 0
+			if unknown {
+				if got != nil {
+					t.Fatalf("CostFor(%q) = %v, want nil", tc.model, *got)
+				}
+				if warned != tc.model {
+					t.Errorf("OnWarn got %q, want original model id %q", warned, tc.model)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("CostFor(%q) = nil, want %v", tc.model, tc.wantVal)
+			}
+			if math.Abs(*got-tc.wantVal) > 1e-9 {
+				t.Errorf("CostFor(%q) = %v, want %v", tc.model, *got, tc.wantVal)
+			}
+			if warned != "" {
+				t.Errorf("unexpected warn for known model: %q", warned)
+			}
+		})
 	}
 }
 
