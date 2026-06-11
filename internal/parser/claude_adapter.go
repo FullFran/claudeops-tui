@@ -21,7 +21,7 @@ func (ClaudeLineParser) ParseLine(line []byte, _ source.LineContext) ([]source.R
 	case AssistantEvent:
 		r := source.Record{
 			Source:      source.Claude,
-			UUID:        e.UUID,
+			UUID:        e.DedupUUID(),
 			SessionID:   e.Session,
 			CWD:         e.CWD,
 			Type:        "assistant",

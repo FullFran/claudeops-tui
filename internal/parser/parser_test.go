@@ -28,6 +28,53 @@ func TestParseAssistant(t *testing.T) {
 	}
 }
 
+func TestParseAssistantDecodesMessageAndRequestIDs(t *testing.T) {
+	line := []byte(`{
+	  "type":"assistant","uuid":"u1","sessionId":"s1","cwd":"/p","requestId":"req_1",
+	  "timestamp":"2026-06-11T10:00:00Z",
+	  "message":{"id":"msg_1","role":"assistant","model":"claude-fable-5",
+	    "usage":{"input_tokens":1,"output_tokens":2}}
+	}`)
+	ev, err := ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := ev.(AssistantEvent)
+	if !ok {
+		t.Fatalf("want AssistantEvent got %T", ev)
+	}
+	if a.MessageID != "msg_1" {
+		t.Errorf("MessageID: got %q want %q", a.MessageID, "msg_1")
+	}
+	if a.RequestID != "req_1" {
+		t.Errorf("RequestID: got %q want %q", a.RequestID, "req_1")
+	}
+}
+
+func TestAssistantDedupUUID(t *testing.T) {
+	cases := []struct {
+		name  string
+		msgID string
+		reqID string
+		uuid  string
+		want  string
+	}{
+		{"message and request ids combine", "msg_1", "req_1", "u1", "msg_1:req_1"},
+		{"message id alone is sufficient", "msg_1", "", "u1", "msg_1"},
+		{"no ids falls back to line uuid", "", "", "u1", "u1"},
+		{"request id alone is not enough", "", "req_1", "u1", "u1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := AssistantEvent{MessageID: tc.msgID, RequestID: tc.reqID}
+			a.UUID = tc.uuid
+			if got := a.DedupUUID(); got != tc.want {
+				t.Errorf("DedupUUID() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseUser(t *testing.T) {
 	ev, err := ParseLine([]byte(`{"type":"user","uuid":"u","sessionId":"s","cwd":"/p","timestamp":"2026-04-08T13:10:57Z"}`))
 	if err != nil {

@@ -176,16 +176,55 @@ func (s *Store) Insert(ctx context.Context, ev Event, costEUR *float64, taskID *
 		source = "claude"
 	}
 
-	// insert event (idempotent on uuid)
+	// Insert the event, keyed by uuid. For assistant events the uuid is the
+	// dedup key (message.id[:requestId]), so Claude Code's one-line-per-content-
+	// block writes collapse onto a single row. Those lines share input/cache
+	// counts but output_tokens grows monotonically (streaming partial → final),
+	// so on conflict we keep the row with the largest output_tokens — together
+	// with its consistently-computed cost. Equal output is a no-op, which keeps
+	// re-ingestion idempotent and order-independent.
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO events (uuid, session_id, ts, type, model, in_tokens, out_tokens, cache_read_tokens, cache_create_tokens, cost_eur, task_id, source)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(uuid) DO NOTHING`,
+		 ON CONFLICT(uuid) DO UPDATE SET
+		     in_tokens           = excluded.in_tokens,
+		     out_tokens          = excluded.out_tokens,
+		     cache_read_tokens   = excluded.cache_read_tokens,
+		     cache_create_tokens = excluded.cache_create_tokens,
+		     cost_eur            = excluded.cost_eur
+		   WHERE excluded.out_tokens > events.out_tokens`,
 		ev.UUID, ev.SessionID, tsStr, ev.Type, nullString(ev.Model),
 		ev.InTokens, ev.OutTokens, ev.CacheReadTokens, ev.CacheCreateTokens,
 		nullFloat(costEUR), nullString(strDeref(taskID)), source,
 	); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// ResetIngestedData clears everything derived from source files — events,
+// sessions, projects, persisted file offsets, and source watermarks — so the
+// next ingest rebuilds them from scratch. User-owned data (tasks, config) is
+// left intact. This backs `claudeops reingest`, which exists because pre-fix
+// installs stored one inflated row per assistant content block; re-ingesting
+// from the JSONL files under the corrected dedup key produces accurate rows.
+func (s *Store) ResetIngestedData(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Children before parents to respect foreign keys (events → sessions → projects).
+	for _, stmt := range []string{
+		`DELETE FROM events`,
+		`DELETE FROM sessions`,
+		`DELETE FROM projects`,
+		`DELETE FROM file_offsets`,
+		`DELETE FROM source_watermarks`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

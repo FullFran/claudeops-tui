@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/fullfran/claudeops-tui/internal/source"
@@ -76,6 +77,45 @@ func TestClaudeLineParserAdapter(t *testing.T) {
 		_, err := lp.ParseLine([]byte(`{not json`), ctx)
 		if err == nil {
 			t.Error("expected error on bad JSON")
+		}
+	})
+}
+
+// Claude Code writes one JSONL line per content block of an assistant message:
+// each line has a distinct uuid but the same message.id, requestId, and an
+// identical usage object. Records from those lines must share a UUID so the
+// store's ON CONFLICT(uuid) DO NOTHING counts the usage exactly once.
+func TestClaudeLineParserDedupsContentBlockUsage(t *testing.T) {
+	const lineTmpl = `{"type":"assistant","uuid":"%s","sessionId":"s1","cwd":"/p","requestId":"req_9","timestamp":"2026-06-11T10:00:00Z","message":{"id":"msg_9","model":"claude-fable-5","usage":{"input_tokens":1,"output_tokens":2}}}`
+	lp := ClaudeLineParser{}
+	ctx := source.LineContext{Path: "/some/file.jsonl"}
+
+	r1, err := lp.ParseLine([]byte(fmt.Sprintf(lineTmpl, "block-1")), ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, err := lp.ParseLine([]byte(fmt.Sprintf(lineTmpl, "block-2")), ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r1) != 1 || len(r2) != 1 {
+		t.Fatalf("want 1 record each, got %d and %d", len(r1), len(r2))
+	}
+	if r1[0].UUID != r2[0].UUID {
+		t.Errorf("content-block lines must share a UUID: %q vs %q", r1[0].UUID, r2[0].UUID)
+	}
+	if r1[0].UUID != "msg_9:req_9" {
+		t.Errorf("UUID = %q, want %q", r1[0].UUID, "msg_9:req_9")
+	}
+
+	t.Run("line without message.id keeps its line uuid", func(t *testing.T) {
+		legacy := []byte(`{"type":"assistant","uuid":"legacy-u1","sessionId":"s1","cwd":"/p","timestamp":"2026-06-11T10:00:00Z","message":{"model":"claude-fable-5","usage":{"input_tokens":1,"output_tokens":2}}}`)
+		r, err := lp.ParseLine(legacy, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(r) != 1 || r[0].UUID != "legacy-u1" {
+			t.Fatalf("legacy line should keep line uuid, got %+v", r)
 		}
 	})
 }

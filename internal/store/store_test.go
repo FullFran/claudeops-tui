@@ -87,10 +87,128 @@ func TestInsertIdempotentOnUUID(t *testing.T) {
 	}
 }
 
+// Claude Code writes one JSONL line per content block of an assistant message.
+// Those lines share input/cache token counts but output_tokens grows
+// monotonically (streaming partial → final). After dedup they collapse onto
+// one uuid; the surviving row must keep the LARGEST output_tokens (the final
+// count), not the first-seen partial. Keep-first would undercount output.
+func TestInsertKeepsMaxOutputOnConflict(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	ts := time.Now()
+
+	partial := Event{
+		UUID: "msg:req", SessionID: "s1", CWD: "/p", Type: "assistant",
+		Model: "claude-fable-5", TS: ts,
+		InTokens: 10, OutTokens: 1, CacheReadTokens: 200, CacheCreateTokens: 30,
+	}
+	final := partial
+	final.OutTokens = 350 // streaming final count
+	costPartial, costFinal := 0.001, 0.35
+
+	// Ingest order is partial-then-final (the real file order).
+	if err := s.Insert(ctx, partial, &costPartial, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Insert(ctx, final, &costFinal, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var rows, out int64
+	var cost float64
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*), out_tokens, cost_eur FROM events WHERE uuid='msg:req'`,
+	).Scan(&rows, &out, &cost); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("want 1 row, got %d", rows)
+	}
+	if out != 350 {
+		t.Errorf("out_tokens: want 350 (final), got %d", out)
+	}
+	if cost != costFinal {
+		t.Errorf("cost_eur: want %v (recomputed for final), got %v", costFinal, cost)
+	}
+
+	t.Run("reverse order is order-independent", func(t *testing.T) {
+		s := newTestStore(t)
+		if err := s.Insert(ctx, final, &costFinal, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Insert(ctx, partial, &costPartial, nil); err != nil {
+			t.Fatal(err)
+		}
+		var out int64
+		_ = s.db.QueryRow(`SELECT out_tokens FROM events WHERE uuid='msg:req'`).Scan(&out)
+		if out != 350 {
+			t.Errorf("out_tokens after reverse order: want 350, got %d", out)
+		}
+	})
+
+	t.Run("equal output is a no-op (idempotent)", func(t *testing.T) {
+		s := newTestStore(t)
+		c := 0.35
+		if err := s.Insert(ctx, final, &c, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Insert(ctx, final, &c, nil); err != nil {
+			t.Fatal(err)
+		}
+		var rows, out int64
+		_ = s.db.QueryRow(`SELECT COUNT(*), out_tokens FROM events WHERE uuid='msg:req'`).Scan(&rows, &out)
+		if rows != 1 || out != 350 {
+			t.Errorf("idempotent equal insert: rows=%d out=%d, want 1/350", rows, out)
+		}
+	})
+}
+
 func TestInsertRequiresKeys(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.Insert(context.Background(), Event{}, nil, nil); err == nil {
 		t.Fatal("expected error on empty event")
+	}
+}
+
+// ResetIngestedData clears everything derived from source files (events,
+// sessions, projects, file offsets, source watermarks) so a re-ingest rebuilds
+// them from scratch — without touching user-owned tasks or config. This is what
+// `claudeops reingest` relies on to correct pre-fix inflated rows.
+func TestResetIngestedData(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	cost := 0.42
+	ev := makeEvent("u1", "sess-1", "/tmp/proj-x", "claude-opus-4-6", time.Now())
+	if err := s.Insert(ctx, ev, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveOffset("/some/file.jsonl", 100, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveSourceWatermark("opencode", "1700000000000"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfigSet(ctx, "keep", "me"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ResetIngestedData(ctx); err != nil {
+		t.Fatalf("ResetIngestedData: %v", err)
+	}
+
+	for _, tbl := range []string{"events", "sessions", "projects", "file_offsets", "source_watermarks"} {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + tbl).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("%s: want 0 rows after reset, got %d", tbl, n)
+		}
+	}
+
+	// Config is user-owned and must survive a reset.
+	if v, ok, err := s.ConfigGet(ctx, "keep"); err != nil || !ok || v != "me" {
+		t.Errorf("config wiped by reset: v=%q ok=%v err=%v", v, ok, err)
 	}
 }
 

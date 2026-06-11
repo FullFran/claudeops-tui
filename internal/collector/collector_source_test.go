@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -117,4 +118,45 @@ func TestCollectorWithSourceSeam(t *testing.T) {
 			t.Errorf("after append: want 2 got %d", c.IngestedCount())
 		}
 	})
+}
+
+// TestContentBlockLinesCountUsageOnce covers the fix for the ~2.4x over-count:
+// Claude Code writes one JSONL line per content block of an assistant message
+// (distinct uuid, same message.id + requestId). Input/cache counts are stable
+// across those lines but output_tokens grows monotonically (streaming partial →
+// final). End to end, the lines must collapse to one events row carrying the
+// FINAL (largest) output_tokens — not a per-block sum and not the first partial.
+func TestContentBlockLinesCountUsageOnce(t *testing.T) {
+	c, s, root := newTestCollectorSource(t)
+
+	// Real-shaped fixture: output_tokens grows 1 → 5 → 350 across the three
+	// content-block lines; input/cache are identical (as in real logs).
+	const blockTmpl = `{"type":"assistant","uuid":"cb-%d","sessionId":"s-dedup","cwd":"/tmp/proj","requestId":"req_dd","timestamp":"2026-06-11T10:00:0%d.000Z","message":{"id":"msg_dd","model":"claude-fable-5","usage":{"input_tokens":7,"output_tokens":%d,"cache_read_input_tokens":13,"cache_creation_input_tokens":17}}}` + "\n"
+	outputs := []int64{1, 5, 350}
+	content := ""
+	for i, out := range outputs {
+		content += fmt.Sprintf(blockTmpl, i, i, out)
+	}
+	writeJSONL(t, root, "-tmp-dedup", "dedup.jsonl", content)
+
+	if err := c.IngestExisting(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var rows, outSum, inSum int64
+	err := s.DB().QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(out_tokens),0), COALESCE(SUM(in_tokens),0) FROM events WHERE session_id='s-dedup'`,
+	).Scan(&rows, &outSum, &inSum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Errorf("events rows: want 1 (usage counted once), got %d", rows)
+	}
+	if outSum != 350 {
+		t.Errorf("out_tokens: want 350 (final streaming count), got %d", outSum)
+	}
+	if inSum != 7 {
+		t.Errorf("in_tokens: want 7 (counted once), got %d", inSum)
+	}
 }

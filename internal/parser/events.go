@@ -36,10 +36,30 @@ func (c Common) SessionID() string    { return c.Session }
 type AssistantEvent struct {
 	Common
 	Model             string
+	MessageID         string // message.id (msg_*) — same across content-block lines of one API call
+	RequestID         string // top-level requestId (req_*)
 	InTokens          int64
 	OutTokens         int64
 	CacheReadTokens   int64
 	CacheCreateTokens int64
+}
+
+// DedupUUID returns the identity to store the event under. Claude Code writes
+// one JSONL line per content block of an assistant message — each line has a
+// distinct uuid but the same message.id, requestId, and an identical usage
+// object, so storing by line uuid counts the same API call's usage once per
+// content block (~2.4x over-count on real data). Keying by message.id (+
+// requestId when present) lets the store's ON CONFLICT(uuid) DO NOTHING
+// collapse those lines into one row. Lines without message.id (older formats)
+// keep the line uuid, preserving previous behavior.
+func (a AssistantEvent) DedupUUID() string {
+	if a.MessageID == "" {
+		return a.UUID
+	}
+	if a.RequestID == "" {
+		return a.MessageID
+	}
+	return a.MessageID + ":" + a.RequestID
 }
 
 // UserEvent represents a user prompt (no token cost).
@@ -57,7 +77,9 @@ type UnknownEvent struct {
 // rawAssistant is the JSON shape of an assistant line.
 type rawAssistant struct {
 	Common
-	Message struct {
+	RequestID string `json:"requestId"`
+	Message   struct {
+		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage struct {
 			Input       int64 `json:"input_tokens"`
@@ -88,6 +110,8 @@ func ParseLine(b []byte) (Event, error) {
 		return AssistantEvent{
 			Common:            r.Common,
 			Model:             r.Message.Model,
+			MessageID:         r.Message.ID,
+			RequestID:         r.RequestID,
 			InTokens:          r.Message.Usage.Input,
 			OutTokens:         r.Message.Usage.Output,
 			CacheReadTokens:   r.Message.Usage.CacheRead,

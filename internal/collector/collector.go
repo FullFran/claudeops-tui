@@ -236,7 +236,7 @@ func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64
 
 func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEvent) {
 	se := store.Event{
-		UUID:              e.UUID,
+		UUID:              e.DedupUUID(),
 		SessionID:         e.Session,
 		CWD:               e.CWD,
 		Type:              "assistant",
