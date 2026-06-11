@@ -13,7 +13,7 @@ internal/
   tasks/     sidecar current-task.json + correlation
   tui/       Bubbletea model/view/update
   config/    paths, env, defaults
-configs/pricing.toml             embedded via go:embed, copied on first run
+internal/pricing/pricing.seed.toml   embedded via go:embed, copied on first run
 ```
 
 ## Data flow

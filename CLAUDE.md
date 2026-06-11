@@ -55,7 +55,7 @@ Entry point: `cmd/claudeops/main.go` — subcommand router with variable functio
 - **parser** — JSONL line decoder. Permissive: unknown event types are logged once and skipped, never error. Supports format drift.
 - **collector** — fsnotify watcher + per-file tail goroutines. `IngestExisting()` for warm start (uses stored byte offsets). `Watch()` for live.
 - **store** — SQLite with single-writer discipline. Only the writer goroutine calls INSERT. `INSERT ... ON CONFLICT(uuid) DO NOTHING` for idempotency. `Open()` for read-write, `OpenReadOnly()` for MCP server.
-- **pricing** — TOML-based per-model token pricing. Embedded seed in `configs/pricing.toml`, copied to `~/.claudeops/` on first run.
+- **pricing** — TOML-based per-model token pricing. Embedded seed in `internal/pricing/pricing.seed.toml` (via `go:embed`), copied to `~/.claudeops/pricing.toml` on first run; missing seed models are merged into existing installs without overwriting user-customized values.
 - **usage** — OAuth client for `/api/oauth/usage`. Atomic credential read/write with flock on `~/.claude/.credentials.json`. Retry-After backoff on refresh. Falls back to cached data on failure.
 - **tasks** — Sidecar `current-task.json` for task attribution. `Resolve(sessionID, ts)` correlates events to active task.
 - **tui** — Bubbletea multi-tab dashboard (7 tabs). Single Model struct with view modes (Normal → DayBrowse → DayDetail → SessionBrowse → SessionDetail). Viewport-based scrolling. Help overlay and task input modal.
