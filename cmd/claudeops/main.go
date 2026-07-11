@@ -25,6 +25,7 @@ import (
 	ocingester "github.com/fullfran/claudeops-tui/internal/opencode"
 	"github.com/fullfran/claudeops-tui/internal/parser"
 	"github.com/fullfran/claudeops-tui/internal/pricing"
+	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/source"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
@@ -268,6 +269,20 @@ func cmdTUI() error {
 	model.ConfigPath = p.ConfigPath
 	model.ProjectsRoot = p.ClaudeProjects
 	model.LiveDir = p.LiveDir
+	// Additional live-quota providers beyond the bespoke Anthropic block.
+	// Each is skipped silently when its credentials are absent.
+	model.Providers = provider.NewRegistry(
+		provider.NewCodex(),
+		provider.NewCopilot(),
+		provider.NewGemini(),
+	)
+	// User-defined providers: any service with a token + HTTP endpoint can be
+	// tracked via ~/.claudeops/providers.toml without a code change.
+	if gens, err := provider.LoadGeneric(filepath.Join(p.DataDir, "providers.toml")); err == nil {
+		for _, g := range gens {
+			model.Providers.Register(g)
+		}
+	}
 	prog := tea.NewProgram(model, tea.WithAltScreen())
 	_, err = prog.Run()
 	return err
