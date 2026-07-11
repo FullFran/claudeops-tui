@@ -114,6 +114,19 @@
   nav.links a.gh { color: var(--fg-strong); border: 1px solid var(--border-lit); }
   nav.links a.gh:hover { border-color: var(--blue); background: rgba(122,162,247,0.08); }
   @media (max-width: 760px) { nav.links a.hide-sm { display: none; } }
+  /* progressively lighten the nav so it never overflows narrow screens */
+  @media (max-width: 560px) {
+    .nav-inner { gap: 10px; }
+    nav.links { gap: 6px; }
+    nav.links a { padding: 6px 9px; }
+    nav.links a[href="#install"] { display: none; }
+  }
+  @media (max-width: 400px) {
+    .brand { font-size: 13.5px; gap: 6px; }
+    .brand .path { display: none; }
+    nav.links a.gh { padding: 6px 8px; }
+    nav.links { gap: 4px; }
+  }
 
   /* language toggle */
   .lang {
