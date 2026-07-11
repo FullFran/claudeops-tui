@@ -5,6 +5,7 @@ package pricing
 import (
 	"bytes"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -16,6 +17,39 @@ import (
 
 //go:embed pricing.seed.toml
 var SeedTOML []byte
+
+// litellmPricesJSON is a compact snapshot of the LiteLLM pricing dataset
+// (github.com/BerriAI/litellm), keyed by bare model name → [input, output,
+// cache_read, cache_create] in EUR per 1M tokens (USD × 0.92). It provides
+// comprehensive multi-provider coverage as a fallback beneath the editable
+// TOML table, the way CodexBar prices from LiteLLM.
+//
+//go:embed litellm_prices.json
+var litellmPricesJSON []byte
+
+var (
+	litellmOnce  sync.Once
+	litellmTable map[string]ModelPrice
+)
+
+// litellmFallback lazily parses the embedded LiteLLM snapshot. Entries with no
+// real input price are skipped so genuinely-unpriced models still warn.
+func litellmFallback() map[string]ModelPrice {
+	litellmOnce.Do(func() {
+		litellmTable = map[string]ModelPrice{}
+		var raw map[string][4]float64
+		if err := json.Unmarshal(litellmPricesJSON, &raw); err != nil {
+			return
+		}
+		for name, v := range raw {
+			if v[0] == 0 && v[1] == 0 {
+				continue
+			}
+			litellmTable[name] = ModelPrice{Input: v[0], Output: v[1], CacheRead: v[2], CacheCreate: v[3]}
+		}
+	})
+	return litellmTable
+}
 
 // ModelPrice is the EUR cost per 1,000,000 tokens for each class.
 type ModelPrice struct {
@@ -209,22 +243,11 @@ func NewCalculator(t *Table) *Calculator {
 // — fall back to the bare model name ("gpt-5", "gemini-2.5-pro") so entries can
 // be keyed uniformly regardless of which source emitted them.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
-	mp, ok := c.t.Models[model]
+	mp, ok := lookupPrice(c.t.Models, model)
 	if !ok {
-		if i := strings.IndexByte(model, '['); i > 0 && strings.HasSuffix(model, "]") {
-			mp, ok = c.t.Models[model[:i]]
-		}
-	}
-	if !ok {
-		if i := strings.LastIndexByte(model, '/'); i >= 0 && i+1 < len(model) {
-			bare := model[i+1:]
-			mp, ok = c.t.Models[bare]
-			if !ok {
-				if j := strings.IndexByte(bare, '['); j > 0 && strings.HasSuffix(bare, "]") {
-					mp, ok = c.t.Models[bare[:j]]
-				}
-			}
-		}
+		// Fall back to the embedded LiteLLM snapshot for models the editable
+		// table doesn't carry (the user's table always wins when present).
+		mp, ok = lookupPrice(litellmFallback(), model)
 	}
 	if !ok {
 		c.mu.Lock()
@@ -244,6 +267,51 @@ func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64
 		perMillion(cacheRead, mp.CacheRead) +
 		perMillion(cacheCreate, mp.CacheCreate)
 	return &cost
+}
+
+// lookupPrice finds a model's price in `table`, trying progressively looser
+// forms of the id:
+//   - exact match
+//   - bracket suffix stripped ("claude-fable-5[1m]" → "claude-fable-5")
+//   - provider prefix stripped ("openai/gpt-5" → "gpt-5")
+//   - for Claude ids, dots normalized to dashes ("claude-opus-4.6" →
+//     "claude-opus-4-6"), which is how some sources qualify Anthropic models.
+func lookupPrice(table map[string]ModelPrice, model string) (ModelPrice, bool) {
+	for _, k := range priceCandidates(model) {
+		if mp, ok := table[k]; ok {
+			return mp, true
+		}
+	}
+	return ModelPrice{}, false
+}
+
+// priceCandidates returns the ordered lookup keys for a model id.
+func priceCandidates(model string) []string {
+	cands := []string{model}
+	if base, ok := stripBracket(model); ok {
+		cands = append(cands, base)
+	}
+	if i := strings.LastIndexByte(model, '/'); i >= 0 && i+1 < len(model) {
+		bare := model[i+1:]
+		cands = append(cands, bare)
+		if base, ok := stripBracket(bare); ok {
+			cands = append(cands, base)
+		}
+	}
+	// Claude ids with dot-separated versions ("claude-opus-4.6").
+	for _, c := range append([]string{}, cands...) {
+		if strings.HasPrefix(c, "claude") && strings.Contains(c, ".") {
+			cands = append(cands, strings.ReplaceAll(c, ".", "-"))
+		}
+	}
+	return cands
+}
+
+func stripBracket(s string) (string, bool) {
+	if i := strings.IndexByte(s, '['); i > 0 && strings.HasSuffix(s, "]") {
+		return s[:i], true
+	}
+	return "", false
 }
 
 // Updated returns the table's updated date for the dashboard footer.

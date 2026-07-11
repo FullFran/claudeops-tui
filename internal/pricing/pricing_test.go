@@ -354,6 +354,51 @@ func TestSeedPricesOtherProviders(t *testing.T) {
 	}
 }
 
+// TestLiteLLMFallbackPricesRealModels verifies the embedded LiteLLM snapshot
+// prices the multi-provider models real opencode sessions emit — the ones the
+// hand-written seed does not carry — including provider-qualified ids and
+// dot-versioned Claude ids.
+func TestLiteLLMFallbackPricesRealModels(t *testing.T) {
+	// An empty user table forces every lookup through the LiteLLM fallback.
+	c := NewCalculator(&Table{Models: map[string]ModelPrice{}})
+	c.OnWarn = func(string) {}
+
+	priced := []string{
+		"gpt-5.3-codex",
+		"gpt-5.4",
+		"gpt-5.5",
+		"gpt-5.2-codex",
+		"openai/gpt-5.3-codex",           // opencode-qualified
+		"github-copilot/gpt-5.4",         // copilot-qualified → gpt-5.4
+		"google/gemini-2.5-flash",        // → gemini-2.5-flash
+		"github-copilot/claude-opus-4.6", // → claude-opus-4-6 via dot normalization
+	}
+	for _, m := range priced {
+		got := c.CostFor(m, 1_000_000, 1_000_000, 0, 0)
+		if got == nil || *got == 0 {
+			t.Errorf("LiteLLM fallback does not price %q (got %v)", m, got)
+		}
+	}
+
+	// Genuinely unknown models must still return nil (not a silent zero).
+	if got := c.CostFor("totally-made-up-model-zzz", 1_000_000, 0, 0, 0); got != nil {
+		t.Errorf("unknown model priced unexpectedly: %v", *got)
+	}
+}
+
+// TestUserTableWinsOverLiteLLM verifies the editable table takes precedence
+// over the embedded snapshot for the same model.
+func TestUserTableWinsOverLiteLLM(t *testing.T) {
+	c := NewCalculator(&Table{Models: map[string]ModelPrice{
+		"gpt-5.4": {Input: 999, Output: 999},
+	}})
+	c.OnWarn = func(string) {}
+	got := c.CostFor("gpt-5.4", 1_000_000, 0, 0, 0)
+	if got == nil || *got != 999 {
+		t.Errorf("user table did not win over LiteLLM: got %v, want 999", got)
+	}
+}
+
 func TestLoadOrSeedKeepsCurrentFileUntouchedWhenSeedModelsAlreadyExist(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "pricing.toml")
