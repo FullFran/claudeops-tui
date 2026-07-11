@@ -84,7 +84,8 @@ func TestStoreSink(t *testing.T) {
 	})
 
 	// WARNING-2 coverage: unknown (unpriced) model — row must be inserted with
-	// tokens recorded and cost_eur NULL (no pricing entry exists for "gpt-4o").
+	// tokens recorded and cost_eur NULL (no pricing entry exists for a made-up
+	// model id that is deliberately absent from the seed table).
 	t.Run("REQ-1.4.1b unknown model emits row with NULL cost", func(t *testing.T) {
 		sink, s := newTestSink(t)
 		r := source.Record{
@@ -93,7 +94,7 @@ func TestStoreSink(t *testing.T) {
 			SessionID: "sess-codex-unk",
 			CWD:       "", // triggers fallback path
 			Type:      "assistant",
-			Model:     "gpt-4o", // not present in the seed pricing table
+			Model:     "gpt-nonexistent-v99", // not present in the seed pricing table
 			TS:        now,
 			In:        100,
 			Out:       50,

@@ -279,6 +279,81 @@ cache_create =  4.00
 	}
 }
 
+func TestCostForStripsProviderPrefix(t *testing.T) {
+	const table = `
+updated = "2026-07-11"
+currency = "EUR"
+
+[models."gpt-5"]
+input        = 1.15
+output       = 9.20
+cache_read   = 0.115
+cache_create = 0.00
+
+[models."gemini-2.5-pro"]
+input        = 1.15
+output       = 9.20
+cache_read   = 0.115
+cache_create = 0.00
+`
+	tbl, err := parse([]byte(table))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		model   string
+		wantVal float64 // 0 = unknown
+	}{
+		{name: "bare openai key", model: "gpt-5", wantVal: 1.15},
+		{name: "opencode-qualified openai key", model: "openai/gpt-5", wantVal: 1.15},
+		{name: "opencode-qualified gemini key", model: "google/gemini-2.5-pro", wantVal: 1.15},
+		{name: "qualified with bracket suffix", model: "openai/gpt-5[1m]", wantVal: 1.15},
+		{name: "unknown even after strip", model: "openai/gpt-9", wantVal: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCalculator(tbl)
+			c.OnWarn = func(string) {}
+			got := c.CostFor(tc.model, 1_000_000, 0, 0, 0)
+			if tc.wantVal == 0 {
+				if got != nil {
+					t.Fatalf("CostFor(%q) = %v, want nil", tc.model, *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("CostFor(%q) = nil, want %v", tc.model, tc.wantVal)
+			}
+			if math.Abs(*got-tc.wantVal) > 1e-9 {
+				t.Errorf("CostFor(%q) = %v, want %v", tc.model, *got, tc.wantVal)
+			}
+		})
+	}
+}
+
+// TestSeedPricesOtherProviders locks in that the shipped seed actually covers
+// the current Claude Sonnet 5 model (previously €0) and the common OpenAI/
+// Gemini models, including opencode's provider-qualified keys.
+func TestSeedPricesOtherProviders(t *testing.T) {
+	tbl, err := parse(SeedTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewCalculator(tbl)
+	c.OnWarn = func(string) {}
+	for _, model := range []string{
+		"claude-sonnet-5",
+		"gpt-5", "gpt-5-codex", "gpt-5.1-codex", "gpt-4o", "o3",
+		"gemini-2.5-pro", "gemini-2.5-flash",
+		"openai/gpt-5", "google/gemini-2.5-flash",
+	} {
+		if got := c.CostFor(model, 1_000_000, 1_000_000, 0, 0); got == nil || *got == 0 {
+			t.Errorf("seed does not price %q (got %v)", model, got)
+		}
+	}
+}
+
 func TestLoadOrSeedKeepsCurrentFileUntouchedWhenSeedModelsAlreadyExist(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "pricing.toml")

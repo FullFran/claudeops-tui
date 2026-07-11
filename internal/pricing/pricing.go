@@ -204,11 +204,26 @@ func NewCalculator(t *Table) *Calculator {
 // Model IDs with a bracket suffix — e.g. "claude-fable-5[1m]", the 1M-context
 // variant Claude Code reports — fall back to the base ID's price when no
 // explicit entry exists for the suffixed form.
+//
+// Provider-qualified IDs — e.g. opencode's "openai/gpt-5" or "google/gemini-2.5-pro"
+// — fall back to the bare model name ("gpt-5", "gemini-2.5-pro") so entries can
+// be keyed uniformly regardless of which source emitted them.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
 	mp, ok := c.t.Models[model]
 	if !ok {
 		if i := strings.IndexByte(model, '['); i > 0 && strings.HasSuffix(model, "]") {
 			mp, ok = c.t.Models[model[:i]]
+		}
+	}
+	if !ok {
+		if i := strings.LastIndexByte(model, '/'); i >= 0 && i+1 < len(model) {
+			bare := model[i+1:]
+			mp, ok = c.t.Models[bare]
+			if !ok {
+				if j := strings.IndexByte(bare, '['); j > 0 && strings.HasSuffix(bare, "]") {
+					mp, ok = c.t.Models[bare[:j]]
+				}
+			}
 		}
 	}
 	if !ok {
