@@ -199,6 +199,47 @@ func opencodeDefaultDBPath() string {
 	return filepath.Join(home, ".local", "share", "opencode", "opencode.db")
 }
 
+// resolveSources returns the effective source list. When the user has not
+// configured any sources explicitly, it auto-detects which tools are present on
+// disk — claude always, plus codex and opencode when their data exists — so
+// multi-tool usage shows up on the dashboard without manual config, the way
+// CodexBar auto-detects providers. An explicit [[sources]] config always wins.
+func resolveSources(settings config.Settings) []config.SourceConfig {
+	return resolveSourcesWith(settings, codex.CodexRoot(), opencodeDefaultDBPath())
+}
+
+// resolveSourcesWith is the testable core of resolveSources: it probes the
+// given codex sessions dir and opencode DB path for existence.
+func resolveSourcesWith(settings config.Settings, codexRoot, opencodeDB string) []config.SourceConfig {
+	if len(settings.Sources) > 0 {
+		return settings.Sources
+	}
+	srcs := []config.SourceConfig{{Name: "claude", Enabled: true, Format: "jsonl"}}
+	if dirExists(codexRoot) {
+		srcs = append(srcs, config.SourceConfig{Name: "codex", Enabled: true, Format: "jsonl"})
+	}
+	if fileExists(opencodeDB) {
+		srcs = append(srcs, config.SourceConfig{Name: "opencode", Enabled: true})
+	}
+	return srcs
+}
+
+func fileExists(p string) bool {
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
+func dirExists(p string) bool {
+	if p == "" {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
+}
+
 // buildOpencodeIngester builds an opencode Ingester when the opencode source is
 // enabled in sources, or returns nil if it is absent or disabled.
 // s is the claudeops store (used for watermark persistence).
@@ -238,9 +279,10 @@ func cmdTUI() error {
 		uClient.CacheTTL = time.Duration(settings.Usage.CacheTTLSeconds) * time.Second
 	}
 
-	// Build multi-collector using source seam. Default: claude only.
+	// Build multi-collector using source seam. Auto-detects codex/opencode
+	// when present (unless the user configured sources explicitly).
 	sink := source.NewStoreSinkWithTasks(s, calc, tr)
-	srcs := settings.SourceConfigs()
+	srcs := resolveSources(settings)
 	cols := buildCollectors(srcs, sink, p.ClaudeProjects)
 	// Fallback to legacy collector if no source-seam collectors were built.
 	if len(cols) == 0 {
@@ -346,9 +388,9 @@ func cmdReingest(args []string) error {
 // pass cmdTUI runs on startup, so CLI ingest and the TUI agree on coverage.
 func ingestAllSources(ctx context.Context, p config.Paths, s *store.Store, calc *pricing.Calculator, tr *tasks.Tracker) (ingested, unknown, parseErrors int64) {
 	sink := source.NewStoreSinkWithTasks(s, calc, tr)
-	srcs := config.DefaultSettings().SourceConfigs()
+	srcs := resolveSources(config.DefaultSettings())
 	if settings, err := config.LoadOrCreate(p.ConfigPath); err == nil {
-		srcs = settings.SourceConfigs()
+		srcs = resolveSources(settings)
 	}
 	cols := buildCollectors(srcs, sink, p.ClaudeProjects)
 	if len(cols) == 0 {
