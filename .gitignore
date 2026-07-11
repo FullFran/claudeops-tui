@@ -16,3 +16,7 @@
 *.db
 *.db-wal
 *.db-shm
+
+# Agent / tooling scratch (never commit)
+.claude/
+.atl/.skill-registry.cache.json
