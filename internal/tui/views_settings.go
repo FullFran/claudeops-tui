@@ -174,11 +174,15 @@ func settingsItems() []settingsItem {
 			get:    func(s config.Settings) bool { return s.Export.ClaudeOTel.Enabled },
 			toggle: func(s *config.Settings) { s.Export.ClaudeOTel.Enabled = !s.Export.ClaudeOTel.Enabled }},
 		{label: "Include prompts", desc: "log user prompt content",
-			get:    func(s config.Settings) bool { return s.Export.ClaudeOTel.IncludeUserPrompts },
-			toggle: func(s *config.Settings) { s.Export.ClaudeOTel.IncludeUserPrompts = !s.Export.ClaudeOTel.IncludeUserPrompts }},
+			get: func(s config.Settings) bool { return s.Export.ClaudeOTel.IncludeUserPrompts },
+			toggle: func(s *config.Settings) {
+				s.Export.ClaudeOTel.IncludeUserPrompts = !s.Export.ClaudeOTel.IncludeUserPrompts
+			}},
 		{label: "Include tool details", desc: "log Bash commands, file paths",
-			get:    func(s config.Settings) bool { return s.Export.ClaudeOTel.IncludeToolDetails },
-			toggle: func(s *config.Settings) { s.Export.ClaudeOTel.IncludeToolDetails = !s.Export.ClaudeOTel.IncludeToolDetails }},
+			get: func(s config.Settings) bool { return s.Export.ClaudeOTel.IncludeToolDetails },
+			toggle: func(s *config.Settings) {
+				s.Export.ClaudeOTel.IncludeToolDetails = !s.Export.ClaudeOTel.IncludeToolDetails
+			}},
 		{label: "Push now", desc: "send metrics to endpoint immediately",
 			actionKey: "push_now"},
 		{label: "Apply OTel config", desc: "write env vars to ~/.claude/settings.json",

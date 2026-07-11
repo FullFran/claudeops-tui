@@ -7,12 +7,23 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Semantic palette. Every color is adaptive so the UI stays legible on both
+// light and dark terminals (the old fixed ANSI 12/14 were near-invisible on
+// light backgrounds — an accessibility bug).
 var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
-	dimStyle    = lipgloss.NewStyle().Faint(true)
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	colAccent   = lipgloss.AdaptiveColor{Light: "#0057d8", Dark: "#7aa2f7"} // primary
+	colAccent2  = lipgloss.AdaptiveColor{Light: "#0f766e", Dark: "#5fd7d7"} // secondary
+	colMuted    = lipgloss.AdaptiveColor{Light: "#6b7280", Dark: "#8a8f98"} // de-emphasized
+	colOk       = lipgloss.AdaptiveColor{Light: "#0f8a3c", Dark: "#7bd88f"} // healthy
+	colWarn     = lipgloss.AdaptiveColor{Light: "#b45309", Dark: "#e5c07b"} // caution
+	colErr      = lipgloss.AdaptiveColor{Light: "#c0392b", Dark: "#f7768e"} // danger
+	colOnAccent = lipgloss.AdaptiveColor{Light: "#ffffff", Dark: "#11121a"} // text on accent fill
+
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(colAccent2)
+	dimStyle    = lipgloss.NewStyle().Foreground(colMuted)
+	warnStyle   = lipgloss.NewStyle().Foreground(colWarn)
+	errStyle    = lipgloss.NewStyle().Foreground(colErr)
 )
 
 // View is the entrypoint for Bubbletea.
@@ -23,9 +34,12 @@ func (m Model) View() string {
 
 	var sb strings.Builder
 
-	// Title + tab bar
-	sb.WriteString(titleStyle.Render("claudeops") + " " + dimStyle.Render(m.Version) + "\n")
-	sb.WriteString(renderTabBar(m.activeTab) + "\n\n")
+	// Title + tab bar, separated from the body by a full-width rule so the
+	// chrome reads as one header block.
+	brand := titleStyle.Render("◆ claudeops")
+	sb.WriteString(brand + " " + dimStyle.Render(m.Version) + "\n")
+	sb.WriteString(renderTabBar(m.activeTab) + "\n")
+	sb.WriteString(dimStyle.Render(ruleLine(m.width)) + "\n")
 
 	// Body — every tab renders through the viewport so content scrolls
 	// when the terminal is shorter than the rendered content.
@@ -79,6 +93,7 @@ func renderHelp(m Model) string {
 	sb.WriteString("\n" + dimStyle.Render("  Dashboard") + "\n")
 	for _, r := range [][2]string{
 		{"enter", "open daily breakdown (browse 30 days)"},
+		{"p", "switch subscription (All / Claude / Codex / …)"},
 		{"r", "force refresh data"},
 	} {
 		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
@@ -157,8 +172,15 @@ func contextHints(m Model) string {
 		}
 		return "j/k move · space/enter toggle · ? help"
 	case TabDashboard:
+		sub := ""
+		if len(subscriptionNames(m)) > 1 {
+			sub = "p switch sub · "
+		}
 		if len(m.Daily) > 0 {
-			return "1-8 tabs · enter browse days · n task · r refresh · ? help · q quit"
+			return "1-8 tabs · " + sub + "enter browse days · n task · r refresh · ? help · q quit"
+		}
+		if sub != "" {
+			return "1-8 tabs · " + sub + "n task · r refresh · ? help · q quit"
 		}
 	case TabSessions:
 		if len(m.AllSess) > 0 {
@@ -168,21 +190,50 @@ func contextHints(m Model) string {
 	return "1-8 tabs · n task · S stop · r refresh · ? help · q quit"
 }
 
-// padRight pads a string with spaces on the right to width n.
-func padRight(s string, n int) string {
-	if len(s) >= n {
-		return s
+// ruleLine returns a horizontal rule sized to the terminal width (capped so it
+// never dominates very wide terminals). Falls back to a sensible default when
+// the width is not yet known.
+func ruleLine(width int) string {
+	w := width
+	if w <= 0 {
+		w = 72
 	}
-	return s + strings.Repeat(" ", n-len(s))
+	return strings.Repeat("─", min(w, 100))
 }
 
-// truncate cuts s to length n with an ellipsis when too long.
+// padRight pads a string to a display width of n, measuring rune/display width
+// (not bytes) so emoji and accented text stay column-aligned.
+func padRight(s string, n int) string {
+	w := lipgloss.Width(s)
+	if w >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-w)
+}
+
+// truncate cuts s to a display width of n with an ellipsis, never slicing a
+// multi-byte rune in half.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if lipgloss.Width(s) <= n {
 		return s
 	}
 	if n <= 1 {
-		return s[:n]
+		r := []rune(s)
+		if len(r) == 0 {
+			return s
+		}
+		return string(r[:1])
 	}
-	return s[:n-1] + "…"
+	runes := []rune(s)
+	out := make([]rune, 0, n)
+	width := 0
+	for _, r := range runes {
+		rw := lipgloss.Width(string(r))
+		if width+rw > n-1 {
+			break
+		}
+		out = append(out, r)
+		width += rw
+	}
+	return string(out) + "…"
 }

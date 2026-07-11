@@ -19,6 +19,7 @@ import (
 	"github.com/fullfran/claudeops-tui/internal/export"
 	"github.com/fullfran/claudeops-tui/internal/insights"
 	"github.com/fullfran/claudeops-tui/internal/live"
+	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
 	"github.com/fullfran/claudeops-tui/internal/usage"
@@ -26,8 +27,11 @@ import (
 
 // Model is the Bubbletea model for the multi-tab dashboard.
 type Model struct {
-	Store          *store.Store
-	Usage          *usage.Client
+	Store *store.Store
+	Usage *usage.Client
+	// Providers holds additional live-quota providers (Codex, ...) beyond the
+	// bespoke Anthropic block. Nil disables the multi-provider section.
+	Providers      *provider.Registry
 	Tasks          *tasks.Tracker
 	Settings       config.Settings
 	ConfigPath     string // path to config.toml for live saves
@@ -50,6 +54,7 @@ type Model struct {
 	BurnRate4h           float64          // €/hour over the last 4 hours
 	Snap                 *usage.Snapshot
 	UsageErr             string
+	ProviderUsages       []provider.Result // additional providers (Codex, ...)
 	WeeklyCycleLocal     store.Aggregates
 	WeeklyCycleStart     time.Time
 	WeeklyCycleEnd       time.Time
@@ -62,6 +67,7 @@ type Model struct {
 
 	// ui state
 	activeTab Tab
+	subFocus  int // subscription selector: 0 = all, 1..N focuses one provider
 	viewport  viewport.Model
 	width     int
 	height    int
@@ -287,6 +293,7 @@ type refreshMsg struct {
 	burnRate4h           float64
 	snap                 *usage.Snapshot
 	usageErr             string
+	providerUsages       []provider.Result
 	weeklyCycleLocal     store.Aggregates
 	weeklyCycleStart     time.Time
 	weeklyCycleEnd       time.Time
@@ -378,6 +385,9 @@ func refreshCmd(m Model) tea.Cmd {
 					}
 				}
 			}
+		}
+		if m.Providers != nil && m.Settings.Dashboard.ShowSubscription {
+			msg.providerUsages = m.Providers.FetchAll(ctx)
 		}
 		if m.Tasks != nil {
 			if t, ok := m.Tasks.Current(); ok {
@@ -490,6 +500,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveSettingsCursor(-1)
 				m.refreshViewport()
 				return m, nil
+			}
+		case "p":
+			// Cycle the subscription focus (All → each provider → All), only
+			// where the subscription section is visible and worth switching.
+			if m.activeTab == TabDashboard && m.viewMode == viewNormal {
+				if n := len(subscriptionNames(m)); n > 1 {
+					m.subFocus = (m.subFocus + 1) % (n + 1)
+					m.refreshViewport()
+				}
 			}
 		case "r":
 			cmds = append(cmds, refreshCmd(m))
@@ -672,6 +691,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.BurnRate4h = msg.burnRate4h
 		m.Snap = msg.snap
 		m.UsageErr = msg.usageErr
+		m.ProviderUsages = msg.providerUsages
 		m.WeeklyCycleLocal = msg.weeklyCycleLocal
 		m.WeeklyCycleStart = msg.weeklyCycleStart
 		m.WeeklyCycleEnd = msg.weeklyCycleEnd

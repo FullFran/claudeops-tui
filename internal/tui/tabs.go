@@ -45,8 +45,8 @@ func (t Tab) String() string {
 const tabCount = 8
 
 var (
-	tabActive   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("12")).Padding(0, 1)
-	tabInactive = lipgloss.NewStyle().Faint(true).Padding(0, 1)
+	tabActive   = lipgloss.NewStyle().Bold(true).Foreground(colOnAccent).Background(colAccent).Padding(0, 1)
+	tabInactive = lipgloss.NewStyle().Foreground(colMuted).Padding(0, 1)
 )
 
 // renderTabBar draws "1·Dashboard  2·Sessions  3·Projects  ..." with the

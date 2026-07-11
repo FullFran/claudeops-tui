@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/store"
 )
 
@@ -18,35 +19,7 @@ func renderDashboardTab(m Model) string {
 	d := m.Settings.Dashboard
 
 	if d.ShowSubscription {
-		sb.WriteString(headerStyle.Render("Subscription usage") + "\n")
-		if m.UsageErr != "" {
-			sb.WriteString(warnStyle.Render("  "+m.UsageErr) + "\n")
-		} else if m.Snap != nil {
-			if m.Snap.FiveHour != nil {
-				sb.WriteString(renderBucket("  5h         ", m.Snap.FiveHour.Utilization, m.Snap.FiveHour.ResetsAt))
-			}
-			if m.Snap.SevenDay != nil {
-				sb.WriteString(renderBucket("  7d         ", m.Snap.SevenDay.Utilization, m.Snap.SevenDay.ResetsAt))
-			}
-			for _, nb := range m.Snap.PerModelBuckets() {
-				label := "  " + padRight(nb.Label, 11)
-				sb.WriteString(renderBucket(label, nb.Bucket.Utilization, nb.Bucket.ResetsAt))
-			}
-			sb.WriteString("\n")
-			sb.WriteString(dimStyle.Render("  This device · current weekly cycle") + "\n")
-			if m.HasWeeklyCycleWindow {
-				costStyled := colorForSpend(m.WeeklyCycleLocal.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.4f", m.WeeklyCycleLocal.CostEUR))
-				sb.WriteString(fmt.Sprintf("  events: %d   %s\n", m.WeeklyCycleLocal.Events, costStyled))
-				sb.WriteString("  " + dimStyle.Render(fmt.Sprintf("window: %s -> %s",
-					m.WeeklyCycleStart.Local().Format("2006-01-02 15:04"),
-					m.WeeklyCycleEnd.Local().Format("2006-01-02 15:04"))) + "\n")
-			} else {
-				sb.WriteString(dimStyle.Render("  unavailable (weekly cycle window not present in usage snapshot)") + "\n")
-			}
-		} else {
-			sb.WriteString(dimStyle.Render("  —") + "\n")
-		}
-		sb.WriteString("\n")
+		sb.WriteString(renderSubscriptionSection(m))
 	}
 
 	if d.ShowToday {
@@ -187,16 +160,203 @@ func renderDashboardTab(m Model) string {
 	return sb.String()
 }
 
-func renderBucket(label string, util float64, resets time.Time) string {
-	bar := bar(util, 24)
-	when := ""
-	if !resets.IsZero() {
-		d := time.Until(resets).Truncate(time.Minute)
-		when = fmt.Sprintf("  resets in %s", d)
+// subscriptionNames lists the detected subscriptions in display order: the
+// bespoke Claude entry first (when configured), then each extra provider.
+// It backs both the selector chips and the `p` focus-cycling key.
+func subscriptionNames(m Model) []string {
+	names := []string{}
+	if m.Snap != nil || m.UsageErr != "" {
+		names = append(names, "Claude")
 	}
-	return fmt.Sprintf("%s %s %5.1f%%%s\n", label, bar, util, when)
+	for _, r := range m.ProviderUsages {
+		names = append(names, r.Name)
+	}
+	return names
 }
 
+// renderSubscriptionSection renders the "Subscription usage" block. When more
+// than one subscription is present it shows a chip selector; `p` cycles the
+// focus (All → each provider → All) so a long stack collapses to one at a time.
+func renderSubscriptionSection(m Model) string {
+	var sb strings.Builder
+	names := subscriptionNames(m)
+
+	header := headerStyle.Render("Subscription usage")
+	if len(names) > 1 {
+		header += "   " + renderSubChips(names, m.subFocus)
+	}
+	sb.WriteString(header + "\n")
+
+	if len(names) == 0 {
+		sb.WriteString(dimStyle.Render("  —") + "\n\n")
+		return sb.String()
+	}
+
+	focus := m.subFocus
+	if focus < 0 || focus > len(names) {
+		focus = 0
+	}
+	shown := func(i int) bool { return focus == 0 || focus == i+1 }
+
+	first := true
+	emit := func(block string) {
+		if !first {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(block)
+		first = false
+	}
+
+	idx := 0
+	if m.Snap != nil || m.UsageErr != "" {
+		if shown(idx) {
+			emit(renderClaudeBlock(m))
+		}
+		idx++
+	}
+	for _, r := range m.ProviderUsages {
+		if shown(idx) {
+			emit(renderProviderResult(r))
+		}
+		idx++
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// renderSubChips renders the "All Claude Codex …" selector row, highlighting
+// the focused entry (0 = All).
+func renderSubChips(names []string, focus int) string {
+	chip := func(text string, active bool) string {
+		if active {
+			return tabActive.Render(text)
+		}
+		return tabInactive.Render(text)
+	}
+	parts := []string{chip("All", focus == 0)}
+	for i, n := range names {
+		parts = append(parts, chip(n, focus == i+1))
+	}
+	return strings.Join(parts, " ")
+}
+
+// renderClaudeBlock renders the bespoke Anthropic subscription entry: the OAuth
+// quota buckets plus the local-store weekly-cycle correlation.
+func renderClaudeBlock(m Model) string {
+	var sb strings.Builder
+	d := m.Settings.Dashboard
+	sb.WriteString(dimStyle.Render("  Claude") + "\n")
+
+	if m.UsageErr != "" {
+		sb.WriteString(warnStyle.Render("    "+m.UsageErr) + "\n")
+		return sb.String()
+	}
+	if m.Snap == nil {
+		sb.WriteString(dimStyle.Render("    —") + "\n")
+		return sb.String()
+	}
+	if m.Snap.FiveHour != nil {
+		sb.WriteString(renderBucket("  "+padRight("5h", 11), m.Snap.FiveHour.Utilization, m.Snap.FiveHour.ResetsAt))
+	}
+	if m.Snap.SevenDay != nil {
+		sb.WriteString(renderBucket("  "+padRight("7d", 11), m.Snap.SevenDay.Utilization, m.Snap.SevenDay.ResetsAt))
+	}
+	for _, nb := range m.Snap.PerModelBuckets() {
+		sb.WriteString(renderBucket("  "+padRight(nb.Label, 11), nb.Bucket.Utilization, nb.Bucket.ResetsAt))
+	}
+	sb.WriteString(dimStyle.Render("  This device · current weekly cycle") + "\n")
+	if m.HasWeeklyCycleWindow {
+		costStyled := colorForSpend(m.WeeklyCycleLocal.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.4f", m.WeeklyCycleLocal.CostEUR))
+		sb.WriteString(fmt.Sprintf("  events: %d   %s\n", m.WeeklyCycleLocal.Events, costStyled))
+		sb.WriteString("  " + dimStyle.Render(fmt.Sprintf("window: %s -> %s",
+			m.WeeklyCycleStart.Local().Format("2006-01-02 15:04"),
+			m.WeeklyCycleEnd.Local().Format("2006-01-02 15:04"))) + "\n")
+	} else {
+		sb.WriteString(dimStyle.Render("  unavailable (weekly cycle window not present in usage snapshot)") + "\n")
+	}
+	return sb.String()
+}
+
+// renderProviderResult renders one extra provider's entry (name, meters, note),
+// showing a per-provider error inline instead of hiding it.
+func renderProviderResult(r provider.Result) string {
+	var sb strings.Builder
+	sb.WriteString(dimStyle.Render("  "+r.Name) + "\n")
+	if r.Err != nil {
+		sb.WriteString(warnStyle.Render("    "+r.Err.Error()) + "\n")
+		return sb.String()
+	}
+	if len(r.Usage.Windows) == 0 {
+		sb.WriteString(dimStyle.Render("    —") + "\n")
+		return sb.String()
+	}
+	for _, w := range r.Usage.Windows {
+		sb.WriteString(renderBucket("  "+padRight(w.Label, 11), w.Utilization, w.ResetsAt))
+	}
+	if r.Usage.Note != "" {
+		sb.WriteString(dimStyle.Render("    "+r.Usage.Note) + "\n")
+	}
+	return sb.String()
+}
+
+// renderProviders renders every extra provider stacked (used by tests and as a
+// helper); the dashboard itself goes through renderSubscriptionSection.
+func renderProviders(results []provider.Result) string {
+	if len(results) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, r := range results {
+		sb.WriteString("\n")
+		sb.WriteString(renderProviderResult(r))
+	}
+	return sb.String()
+}
+
+func renderBucket(label string, util float64, resets time.Time) string {
+	meter := bar(util, 24)
+	pct := levelStyle(util).Render(fmt.Sprintf("%5.1f%%", util))
+	when := ""
+	if !resets.IsZero() {
+		when = dimStyle.Render("  resets in " + humanDur(time.Until(resets)))
+	}
+	return fmt.Sprintf("%s %s %s%s\n", label, meter, pct, when)
+}
+
+// humanDur renders a duration compactly ("5d 2h", "3h 20m", "45m") instead of
+// Go's default "119h59m0s", which is unreadable for multi-day quota windows.
+func humanDur(d time.Duration) string {
+	if d <= 0 {
+		return "now"
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	mins := int(d.Minutes()) % 60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
+}
+
+// levelStyle colors a utilization value: healthy < 60%, caution < 85%, else
+// danger. Gives an at-a-glance read of how close a quota is to its limit.
+func levelStyle(pct float64) lipgloss.Style {
+	switch {
+	case pct >= 85:
+		return lipgloss.NewStyle().Foreground(colErr)
+	case pct >= 60:
+		return lipgloss.NewStyle().Foreground(colWarn)
+	default:
+		return lipgloss.NewStyle().Foreground(colOk)
+	}
+}
+
+// bar renders a colored progress meter: the filled portion is tinted by level
+// and the empty track is de-emphasized, so the eye lands on the fill.
 func bar(pct float64, width int) string {
 	if pct < 0 {
 		pct = 0
@@ -205,7 +365,9 @@ func bar(pct float64, width int) string {
 		pct = 100
 	}
 	filled := int(pct / 100 * float64(width))
-	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
+	fill := levelStyle(pct).Render(strings.Repeat("█", filled))
+	track := dimStyle.Render(strings.Repeat("░", width-filled))
+	return fill + track
 }
 
 // --- helpers for the new stats ---------------------------------------------
@@ -249,11 +411,11 @@ func sparkline(days []store.DailyAgg, th config.ThresholdsSettings) string {
 func colorForSpend(cost float64, th config.ThresholdsSettings) lipgloss.Style {
 	switch {
 	case cost >= th.DailyAlertEUR:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // red
+		return lipgloss.NewStyle().Foreground(colErr)
 	case cost >= th.DailyWarnEUR:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
+		return lipgloss.NewStyle().Foreground(colWarn)
 	default:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+		return lipgloss.NewStyle().Foreground(colOk)
 	}
 }
 
