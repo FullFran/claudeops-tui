@@ -133,7 +133,7 @@ func TestAddDirsRecursively(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		if err := addDirsRecursively(w, root); err != nil {
 			t.Fatalf("addDirsRecursively: %v", err)
@@ -156,7 +156,7 @@ func TestAddDirsRecursively(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		if err := addDirsRecursively(w, root); err != nil {
 			t.Fatalf("addDirsRecursively: %v", err)
