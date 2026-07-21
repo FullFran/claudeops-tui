@@ -67,22 +67,25 @@ func (ss *StoreSink) Emit(ctx context.Context, r Record) error {
 	}
 
 	ev := store.Event{
-		UUID:              r.UUID,
-		SessionID:         r.SessionID,
-		CWD:               cwd,
-		Type:              r.Type,
-		Model:             r.Model,
-		TS:                r.TS,
-		InTokens:          r.In,
-		OutTokens:         r.Out,
-		CacheReadTokens:   r.CacheRead,
-		CacheCreateTokens: r.CacheCreate,
-		Source:            string(r.Source),
+		UUID:                r.UUID,
+		SessionID:           r.SessionID,
+		CWD:                 cwd,
+		Type:                r.Type,
+		Model:               r.Model,
+		TS:                  r.TS,
+		InTokens:            r.In,
+		OutTokens:           r.Out,
+		CacheReadTokens:     r.CacheRead,
+		CacheCreateTokens:   r.CacheCreate,
+		CacheCreate1hTokens: r.CacheCreate1h,
+		Source:              string(r.Source),
 	}
 
+	// CostForCacheTTL, not CostFor: a 1h cache write bills at roughly 1.6x the
+	// 5m rate, so flattening the split undercosts every long-TTL write.
 	var cost *float64
 	if ss.calc != nil && r.Model != "" {
-		cost = ss.calc.CostFor(r.Model, r.In, r.Out, r.CacheRead, r.CacheCreate)
+		cost = ss.calc.CostForCacheTTL(r.Model, r.In, r.Out, r.CacheRead, r.CacheCreate, r.CacheCreate1h)
 	}
 
 	taskID := ss.tasks.Resolve(r.SessionID, r.TS)

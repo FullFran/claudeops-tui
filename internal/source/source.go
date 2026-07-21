@@ -36,6 +36,9 @@ type Record struct {
 	Out         int64 // output tokens (includes reasoning for OpenAI)
 	CacheRead   int64
 	CacheCreate int64
+	// CacheCreate1h is the part of CacheCreate written with a 1h TTL, which
+	// bills higher than a 5m one. 0 when the source reports no breakdown.
+	CacheCreate1h int64
 }
 
 // Sink decouples source adapters from the concrete store. Implemented by
