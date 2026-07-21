@@ -113,7 +113,7 @@ func (s *Store) columnExists(table, column string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var cid int
 		var name, colType string
@@ -358,7 +358,7 @@ func (s *Store) LoadOffsets() (map[string]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make(map[string]int64)
 	for rows.Next() {
 		var p string

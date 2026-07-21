@@ -262,7 +262,7 @@ func readLastEventType(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	const tailSize = 8 * 1024
 	info, err := f.Stat()

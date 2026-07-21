@@ -12,7 +12,6 @@ var (
 	insightInfoStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
 	insightTipStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan
 	insightWarnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
-	insightCardStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).MarginBottom(1)
 )
 
 // severityPrefix returns an ASCII prefix and a lipgloss style for the given severity.

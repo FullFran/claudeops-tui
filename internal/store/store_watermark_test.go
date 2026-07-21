@@ -15,13 +15,13 @@ func TestSourceWatermark(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		rows, err := s.db.Query("PRAGMA table_info(source_watermarks)")
 		if err != nil {
 			t.Fatalf("PRAGMA: %v", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		var cols []string
 		for rows.Next() {
 			var cid int
@@ -51,7 +51,7 @@ func TestSourceWatermark(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		// Initially empty — LoadSourceWatermark returns "".
 		pos, err := s.LoadSourceWatermark("opencode")
@@ -82,7 +82,7 @@ func TestSourceWatermark(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		_ = s.SaveSourceWatermark("opencode", "100")
 		_ = s.SaveSourceWatermark("opencode", "200")
@@ -102,7 +102,7 @@ func TestSourceWatermark(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		_ = s.SaveSourceWatermark("opencode", "aaa")
 		_ = s.SaveSourceWatermark("codex", "bbb")
@@ -126,13 +126,17 @@ func TestSourceWatermark(t *testing.T) {
 			t.Fatalf("first Open: %v", err)
 		}
 		_ = s1.SaveSourceWatermark("opencode", "xyz")
-		s1.Close()
+		// Closed deliberately before reopening the same path; a failed close
+		// would make the second Open exercise something other than a reopen.
+		if err := s1.Close(); err != nil {
+			t.Fatalf("first Close: %v", err)
+		}
 
 		s2, err := Open(dbPath)
 		if err != nil {
 			t.Fatalf("second Open: %v", err)
 		}
-		defer s2.Close()
+		defer func() { _ = s2.Close() }()
 
 		pos, err := s2.LoadSourceWatermark("opencode")
 		if err != nil {

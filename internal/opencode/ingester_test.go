@@ -104,7 +104,7 @@ func (f *fakeSink) Emit(_ context.Context, r source.Record) error {
 func TestIngesterFilterAssistantOnly(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/myproject")
 	insertMessage(t, db, "msg1", "ses1", 1000,
@@ -136,7 +136,7 @@ func TestIngesterFilterAssistantOnly(t *testing.T) {
 func TestIngesterUUIDPrefix(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/project")
 	insertMessage(t, db, "abc123", "ses1", 1000,
@@ -166,7 +166,7 @@ func TestIngesterUUIDPrefix(t *testing.T) {
 func TestIngesterProjectAttribution(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/myproject")
 	insertMessage(t, db, "msg1", "ses1", 1000,
@@ -193,7 +193,7 @@ func TestIngesterProjectAttribution(t *testing.T) {
 func TestIngesterFallbackCWD(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Insert message with no matching session
 	insertMessage(t, db, "orphan1", "nonexistent-session", 1000,
@@ -219,7 +219,7 @@ func TestIngesterFallbackCWD(t *testing.T) {
 func TestIngesterWatermark(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/project")
 	insertMessage(t, db, "msg1", "ses1", 1000,
@@ -283,7 +283,7 @@ func TestIngesterWatermark(t *testing.T) {
 func TestIngesterModelNormalization(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/project")
 	// Anthropic model with dots in version (should normalize).
@@ -333,7 +333,7 @@ func TestIngesterModelNormalization(t *testing.T) {
 func TestIngesterCostIgnored(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/project")
 	insertMessage(t, db, "msg1", "ses1", 1000,
@@ -367,7 +367,7 @@ func TestIngesterCostIgnored(t *testing.T) {
 func TestIngesterSessionIDPrefix(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses-abc", "/home/user/project")
 	insertMessage(t, db, "msg1", "ses-abc", 1000,
@@ -394,7 +394,7 @@ func TestIngesterSessionIDPrefix(t *testing.T) {
 func TestIngesterTimestamp(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// 1779661848629 ms = 2026-04-24T... — just verify non-zero and correct scale.
 	insertSession(t, db, "ses1", "/home/user/project")
@@ -436,7 +436,11 @@ func TestIngesterName(t *testing.T) {
 func TestIngesterWatchCancels(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	db.Close()
+	// Closed deliberately so the ingester reopens the file by path; a failed
+	// close would leave the fixture locked and the reopen would not be tested.
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture db: %v", err)
+	}
 
 	wm := newFakeStore()
 	sink := &fakeSink{}
@@ -557,7 +561,7 @@ func contains(list []string, want string) bool {
 func TestIngesterEmitFailureDoesNotAdvanceWatermark(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/project")
 	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(10))
@@ -590,7 +594,7 @@ func TestIngesterEmitFailureDoesNotAdvanceWatermark(t *testing.T) {
 func TestIngesterBoundaryTimestamps(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/project")
 	for _, id := range []string{"msg1", "msg2", "msg3"} {
@@ -626,7 +630,7 @@ func TestIngesterBoundaryTimestamps(t *testing.T) {
 func TestIngesterPartialRowCorrected(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	insertSession(t, db, "ses1", "/home/user/project")
 	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(5))
@@ -703,7 +707,7 @@ func TestIngesterSchemaMismatch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open fixture: %v", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			if _, err := db.Exec(tt.schema); err != nil {
 				t.Fatalf("fixture schema: %v", err)
 			}

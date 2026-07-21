@@ -42,7 +42,7 @@ func (s *Store) AggregatesBySource(ctx context.Context, since time.Time) ([]Sour
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SourceAgg
 	for rows.Next() {
 		var ag SourceAgg

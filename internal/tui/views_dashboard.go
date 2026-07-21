@@ -28,9 +28,9 @@ func renderDashboardTab(m Model) string {
 			sb.WriteString(dimStyle.Render("  —") + "\n")
 		} else {
 			costStyled := colorForSpend(m.Today.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.4f", m.Today.CostEUR))
-			sb.WriteString(fmt.Sprintf("  events: %d   %s\n", m.Today.Events, costStyled))
-			sb.WriteString(fmt.Sprintf("  in: %d   out: %d   cache_read: %d   cache_create: %d\n",
-				m.Today.InTokens, m.Today.OutTokens, m.Today.CacheReadTokens, m.Today.CacheCreateTokens))
+			fmt.Fprintf(&sb, "  events: %d   %s\n", m.Today.Events, costStyled)
+			fmt.Fprintf(&sb, "  in: %d   out: %d   cache_read: %d   cache_create: %d\n",
+				m.Today.InTokens, m.Today.OutTokens, m.Today.CacheReadTokens, m.Today.CacheCreateTokens)
 			// Inline derived stats: cache hit ratio and tokens-per-€.
 			extras := []string{}
 			if d.ShowCacheHitRatio {
@@ -70,9 +70,9 @@ func renderDashboardTab(m Model) string {
 
 	if d.ShowBurnRate && m.BurnRate4h > 0 {
 		sb.WriteString(headerStyle.Render("Burn rate") + "\n")
-		sb.WriteString(fmt.Sprintf("  %s   %s\n",
+		fmt.Fprintf(&sb, "  %s   %s\n",
 			colorForSpend(m.BurnRate4h*24, d.Thresholds).Render(fmt.Sprintf("€%.3f/h", m.BurnRate4h)),
-			dimStyle.Render(fmt.Sprintf("(last 4h · projected: €%.2f/day)", m.BurnRate4h*24))))
+			dimStyle.Render(fmt.Sprintf("(last 4h · projected: €%.2f/day)", m.BurnRate4h*24)))
 		sb.WriteString("\n")
 	}
 
@@ -80,17 +80,17 @@ func renderDashboardTab(m Model) string {
 		streak := currentStreak(m.Daily)
 		if streak > 0 {
 			sb.WriteString(headerStyle.Render("Streak") + "\n")
-			sb.WriteString(fmt.Sprintf("  %d days with activity\n\n", streak))
+			fmt.Fprintf(&sb, "  %d days with activity\n\n", streak)
 		}
 	}
 
 	if d.ShowMaxDay30d && len(m.Daily) > 0 {
 		if maxD, ok := maxDay(m.Daily); ok && maxD.CostEUR > 0 {
 			sb.WriteString(headerStyle.Render("Most expensive day (30d)") + "\n")
-			sb.WriteString(fmt.Sprintf("  %s   %s   %d events\n\n",
+			fmt.Fprintf(&sb, "  %s   %s   %d events\n\n",
 				maxD.Date.Format("2006-01-02 Mon"),
 				colorForSpend(maxD.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.2f", maxD.CostEUR)),
-				maxD.Events))
+				maxD.Events)
 		}
 	}
 
@@ -100,14 +100,14 @@ func renderDashboardTab(m Model) string {
 		if todayRow.Sessions > 0 {
 			avg := todayRow.CostEUR / float64(todayRow.Sessions)
 			sb.WriteString(headerStyle.Render("Avg cost per session (today)") + "\n")
-			sb.WriteString(fmt.Sprintf("  €%.4f   over %d sessions\n\n", avg, todayRow.Sessions))
+			fmt.Fprintf(&sb, "  €%.4f   over %d sessions\n\n", avg, todayRow.Sessions)
 		}
 	}
 
 	if d.ShowPerModelToday && len(m.PerModelToday) > 0 {
 		sb.WriteString(headerStyle.Render("Per-model today") + "\n")
 		for _, p := range m.PerModelToday {
-			sb.WriteString(fmt.Sprintf("  %-30s  €%.4f\n", truncate(p.Model, 30), p.CostEUR))
+			fmt.Fprintf(&sb, "  %-30s  €%.4f\n", truncate(p.Model, 30), p.CostEUR)
 		}
 		sb.WriteString("\n")
 	}
@@ -119,7 +119,7 @@ func renderDashboardTab(m Model) string {
 		} else {
 			for _, s := range m.TopSess {
 				id := truncate(s.SessionID, 8)
-				sb.WriteString(fmt.Sprintf("  %s  %-22s  €%.4f\n", id, truncate(s.ProjectName, 22), s.CostEUR))
+				fmt.Fprintf(&sb, "  %s  %-22s  €%.4f\n", id, truncate(s.ProjectName, 22), s.CostEUR)
 			}
 		}
 		sb.WriteString("\n")
@@ -131,7 +131,7 @@ func renderDashboardTab(m Model) string {
 			sb.WriteString(dimStyle.Render("  —") + "\n")
 		} else {
 			for _, p := range m.TopProj {
-				sb.WriteString(fmt.Sprintf("  %-30s  €%.4f\n", truncate(p.ProjectName, 30), p.CostEUR))
+				fmt.Fprintf(&sb, "  %-30s  €%.4f\n", truncate(p.ProjectName, 30), p.CostEUR)
 			}
 		}
 		sb.WriteString("\n")
@@ -143,7 +143,7 @@ func renderDashboardTab(m Model) string {
 			sb.WriteString(dimStyle.Render("  no active task") + "\n")
 		} else {
 			elapsed := time.Since(m.ActiveTask.StartedAt).Truncate(time.Second)
-			sb.WriteString(fmt.Sprintf("  %s   elapsed: %s\n", m.ActiveTask.Name, elapsed))
+			fmt.Fprintf(&sb, "  %s   elapsed: %s\n", m.ActiveTask.Name, elapsed)
 		}
 	}
 
@@ -152,8 +152,8 @@ func renderDashboardTab(m Model) string {
 		sb.WriteString(headerStyle.Render("By source") + "\n")
 		for _, ag := range m.SourceAggs {
 			costStyled := colorForSpend(ag.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.4f", ag.CostEUR))
-			sb.WriteString(fmt.Sprintf("  %-12s  events: %d   %s\n",
-				ag.Source, ag.Events, costStyled))
+			fmt.Fprintf(&sb, "  %-12s  events: %d   %s\n",
+				ag.Source, ag.Events, costStyled)
 		}
 	}
 
@@ -267,7 +267,7 @@ func renderClaudeBlock(m Model) string {
 	sb.WriteString(dimStyle.Render("  This device · current weekly cycle") + "\n")
 	if m.HasWeeklyCycleWindow {
 		costStyled := colorForSpend(m.WeeklyCycleLocal.CostEUR, d.Thresholds).Render(fmt.Sprintf("€%.4f", m.WeeklyCycleLocal.CostEUR))
-		sb.WriteString(fmt.Sprintf("  events: %d   %s\n", m.WeeklyCycleLocal.Events, costStyled))
+		fmt.Fprintf(&sb, "  events: %d   %s\n", m.WeeklyCycleLocal.Events, costStyled)
 		sb.WriteString("  " + dimStyle.Render(fmt.Sprintf("window: %s -> %s",
 			m.WeeklyCycleStart.Local().Format("2006-01-02 15:04"),
 			m.WeeklyCycleEnd.Local().Format("2006-01-02 15:04"))) + "\n")

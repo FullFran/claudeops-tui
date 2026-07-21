@@ -39,11 +39,11 @@ func (h *collectorHealth) writeTo(w io.Writer) {
 	if len(notes) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "claudeops: ingestion reported %d problem(s) during this session:\n", len(notes))
+	_, _ = fmt.Fprintf(w, "claudeops: ingestion reported %d problem(s) during this session:\n", len(notes))
 	for _, n := range notes {
-		fmt.Fprintf(w, "  %s\n", n)
+		_, _ = fmt.Fprintf(w, "  %s\n", n)
 	}
-	fmt.Fprintln(w, "  data may be incomplete — run `claudeops ingest` to catch up")
+	_, _ = fmt.Fprintln(w, "  data may be incomplete — run `claudeops ingest` to catch up")
 }
 
 // superviseWatch runs a watch loop and records the error it died with. A

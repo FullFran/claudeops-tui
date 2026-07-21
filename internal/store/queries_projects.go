@@ -43,7 +43,7 @@ func (s *Store) AggregatesByProjectBetween(ctx context.Context, from, to time.Ti
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var result []ProjectPeriodAgg
 	for rows.Next() {
 		var a ProjectPeriodAgg

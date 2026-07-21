@@ -245,10 +245,9 @@ func truncate(s string, n int) string {
 		}
 		return string(r[:1])
 	}
-	runes := []rune(s)
 	out := make([]rune, 0, n)
 	width := 0
-	for _, r := range runes {
+	for _, r := range s {
 		rw := lipgloss.Width(string(r))
 		if width+rw > n-1 {
 			break

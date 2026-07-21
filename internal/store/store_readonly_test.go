@@ -24,7 +24,7 @@ func TestOpenReadOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenReadOnly: %v", err)
 		}
-		defer ro.Close()
+		defer func() { _ = ro.Close() }()
 
 		// Reads must work.
 		var n int
@@ -58,7 +58,7 @@ func TestOpenReadOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenReadOnly: %v", err)
 		}
-		defer ro.Close()
+		defer func() { _ = ro.Close() }()
 
 		ctx := context.Background()
 		cost := 0.1

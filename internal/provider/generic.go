@@ -156,7 +156,7 @@ func (g *Generic) Fetch(ctx context.Context) (Usage, error) {
 	if err != nil {
 		return Usage{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return Usage{}, fmt.Errorf("%s endpoint returned HTTP %d", g.Name(), resp.StatusCode)
 	}

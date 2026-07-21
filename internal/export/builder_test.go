@@ -8,8 +8,6 @@ import (
 	"github.com/fullfran/claudeops-tui/internal/store"
 )
 
-func ptr[T any](v T) *T { return &v }
-
 var testScope = InstrumentationScope{Name: "claudeops", Version: "test"}
 
 func baseResource(userName string) Resource {

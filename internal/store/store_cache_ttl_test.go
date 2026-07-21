@@ -36,7 +36,7 @@ func TestMigrateAddCacheCreate1h(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reopen: %v", err)
 		}
-		defer s1.Close()
+		defer func() { _ = s1.Close() }()
 
 		has, err := s1.columnExists("events", "cache_create_1h_tokens")
 		if err != nil {
@@ -70,7 +70,7 @@ func TestMigrateAddCacheCreate1h(t *testing.T) {
 		if err != nil {
 			t.Fatalf("second open: %v", err)
 		}
-		defer s2.Close()
+		defer func() { _ = s2.Close() }()
 		if has, _ := s2.columnExists("events", "cache_create_1h_tokens"); !has {
 			t.Fatal("cache_create_1h_tokens missing after reopen")
 		}

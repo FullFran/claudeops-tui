@@ -125,7 +125,7 @@ func (s *Store) TopSessionsByCost(ctx context.Context, n int, since time.Time) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SessionAgg
 	for rows.Next() {
 		var sa SessionAgg
@@ -161,7 +161,7 @@ func (s *Store) TopProjectsByCost(ctx context.Context, n int, since time.Time) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ProjectAgg
 	for rows.Next() {
 		var pa ProjectAgg
@@ -208,7 +208,7 @@ func (s *Store) TaskAggregates(ctx context.Context) ([]TaskAgg, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []TaskAgg
 	for rows.Next() {
 		var ta TaskAgg
@@ -268,7 +268,7 @@ func (s *Store) DailyAggregatesLocal(ctx context.Context, days int) ([]DailyAgg,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	byDay := make(map[string]DailyAgg, days)
 	for rows.Next() {

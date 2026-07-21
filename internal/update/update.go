@@ -182,20 +182,35 @@ func extractSemver(s string) string {
 }
 
 // semverLT returns true when a < b (simple major.minor.patch comparison).
+// A version string that does not yield all three components is treated as
+// incomparable and never reported as older: Sscanf would otherwise leave the
+// zero value behind, making an unparseable version look like 0.0.0 and any
+// real version look newer than it.
 func semverLT(a, b string) bool {
-	parse := func(v string) [3]int {
-		v = strings.TrimPrefix(v, "v")
-		var maj, min, pat int
-		fmt.Sscanf(v, "%d.%d.%d", &maj, &min, &pat)
-		return [3]int{maj, min, pat}
+	av, aok := parseSemver(a)
+	bv, bok := parseSemver(b)
+	if !aok || !bok {
+		return false
 	}
-	av, bv := parse(a), parse(b)
 	for i := range av {
 		if av[i] != bv[i] {
 			return av[i] < bv[i]
 		}
 	}
 	return false // equal is not less-than
+}
+
+// parseSemver splits "vX.Y.Z" (and "X.Y.Z-suffix") into its numeric parts.
+// It reports false unless all three components were read.
+func parseSemver(v string) ([3]int, bool) {
+	v = strings.TrimPrefix(v, "v")
+	var maj, min, pat int
+	// A trailing suffix such as "-rc1" leaves n == 3 and is intentionally
+	// ignored, so prereleases still compare on their base version.
+	if n, _ := fmt.Sscanf(v, "%d.%d.%d", &maj, &min, &pat); n < 3 {
+		return [3]int{}, false
+	}
+	return [3]int{maj, min, pat}, true
 }
 
 func resolveOrClean(r Runner, path string) string {

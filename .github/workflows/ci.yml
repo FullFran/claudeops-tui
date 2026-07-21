@@ -43,11 +43,7 @@ jobs:
       - name: Test (race)
         run: go test -race ./...
 
-      # golangci-lint has never been enforced on this codebase and currently
-      # reports ~50 findings (errcheck, staticcheck, unused). Surface them
-      # without blocking; drop continue-on-error once the backlog is cleared.
       - name: Lint
         uses: golangci/golangci-lint-action@v8
-        continue-on-error: true
         with:
           version: v2.12

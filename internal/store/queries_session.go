@@ -59,7 +59,7 @@ func (s *Store) ModelsForSession(ctx context.Context, sessionID string) ([]Model
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ModelAgg
 	for rows.Next() {
 		var ma ModelAgg
@@ -90,7 +90,7 @@ func (s *Store) HourlyForSession(ctx context.Context, sessionID string) ([]Hourl
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []HourlyAgg
 	for rows.Next() {
 		var ha HourlyAgg

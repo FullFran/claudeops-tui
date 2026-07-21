@@ -1,0 +1,15 @@
+version: "2"
+
+# No `linters` section on purpose: the default set (errcheck, govet,
+# ineffassign, staticcheck, unused) is what this project runs against.
+# This file only widens what gets reported, never narrows it.
+
+issues:
+  # golangci-lint defaults to max-issues-per-linter: 50 and max-same-issues: 3,
+  # which truncate the report instead of the work. The first full run on this
+  # codebase showed "53 issues" under those defaults and 111 with them off —
+  # 58 real findings were hidden purely because they shared a message with
+  # three earlier ones. Report everything so the backlog cannot silently
+  # regrow behind the cap.
+  max-issues-per-linter: 0
+  max-same-issues: 0

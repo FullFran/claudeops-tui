@@ -74,7 +74,7 @@ func doPost(ctx context.Context, client *http.Client, endpoint string, headers m
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case 200, 202, 204:
 		return nil

@@ -33,7 +33,7 @@ func TestBuildCollectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		tbl, _ := pricing.LoadOrSeed(filepath.Join(dir, "pricing.toml"))
 		calc := pricing.NewCalculator(tbl)
@@ -54,7 +54,7 @@ func TestBuildCollectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		tbl, _ := pricing.LoadOrSeed(filepath.Join(dir, "pricing.toml"))
 		calc := pricing.NewCalculator(tbl)
@@ -93,7 +93,7 @@ func TestBuildCollectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		tbl, _ := pricing.LoadOrSeed(filepath.Join(dir, "pricing.toml"))
 		calc := pricing.NewCalculator(tbl)
