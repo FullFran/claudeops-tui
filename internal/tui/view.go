@@ -41,7 +41,7 @@ func (m Model) View() string {
 	// chrome reads as one header block.
 	brand := titleStyle.Render("◆ claudeops")
 	head := brand + " " + dimStyle.Render(m.Version) + "\n" +
-		renderTabBar(m.activeTab) + "\n" +
+		renderTabBar(m.activeTab, visibleTabs(m.Settings)) + "\n" +
 		dimStyle.Render(ruleLine(m.width))
 
 	// Tail — modals, status line and footer. Every block is prefixed with a

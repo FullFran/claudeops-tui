@@ -513,46 +513,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			cmds = append(cmds, refreshCmd(m))
 		case "tab", "right", "l":
-			m.activeTab = (m.activeTab + 1) % tabCount
-			m.viewMode = viewNormal
-			m.refreshViewport()
+			m.selectTab(nextVisibleTab(m.activeTab, m.Settings, 1))
 		case "shift+tab", "left", "h":
-			m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "1":
-			m.activeTab = TabDashboard
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "2":
-			m.activeTab = TabSessions
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "3":
-			m.activeTab = TabProjects
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "4":
-			m.activeTab = TabModels
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "5":
-			m.activeTab = TabTasks
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "6":
-			m.activeTab = TabInsights
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "7":
-			m.activeTab = TabClassroom
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "8":
-			m.activeTab = TabSettings
-			m.viewMode = viewNormal
-			m.settingsCursor = 1 // skip first section header
-			m.refreshViewport()
+			m.selectTab(nextVisibleTab(m.activeTab, m.Settings, -1))
+		case "1", "2", "3", "4", "5", "6", "7", "8":
+			t := Tab(msg.String()[0] - '1')
+			if tabVisible(t, m.Settings) {
+				m.selectTab(t)
+			}
+			return m, nil
 		case " ":
 			if m.activeTab == TabSettings {
 				items := settingsItems()
@@ -717,6 +686,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// selectTab switches to t, leaving any drill-down behind.
+func (m *Model) selectTab(t Tab) {
+	m.activeTab = t
+	m.viewMode = viewNormal
+	if t == TabSettings {
+		m.settingsCursor = firstSettingsRow()
+	}
+	m.refreshViewport()
+}
+
+// firstSettingsRow returns the index of the first selectable settings row.
+func firstSettingsRow() int {
+	for i, item := range settingsItems() {
+		if !isSettingsNonNav(item) {
+			return i
+		}
+	}
+	return 0
 }
 
 // isSettingsNonNav reports whether an item should be skipped during cursor navigation.
