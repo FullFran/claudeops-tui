@@ -67,11 +67,13 @@ func TestCostForCacheTTLPrices1hWritesAtThe1hRate(t *testing.T) {
 			want:        600*12.50/1e6 + 400*30.00/1e6,
 		},
 		{
-			name:        "1h portion larger than the total is clamped",
+			// Never bill more cache-write tokens than the source reported: the
+			// 1h portion is capped at the total, not added on top of it.
+			name:        "1h portion larger than the total is clamped to the total",
 			model:       "claude-fable-5",
 			cacheCreate: 1000,
 			create1h:    4000,
-			want:        4000 * 18.40 / 1e6,
+			want:        1000 * 18.40 / 1e6,
 		},
 	}
 	for _, tt := range tests {
