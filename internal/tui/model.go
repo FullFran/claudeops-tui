@@ -77,7 +77,8 @@ type Model struct {
 	taskInput     textinput.Model
 	taskInputOpen bool
 	showHelp      bool
-	statusMsg     string // transient feedback (e.g. "task started: foo")
+	statusMsg     string    // transient feedback (e.g. "task started: foo")
+	statusUntil   time.Time // when statusMsg stops being displayed
 
 	// settings tab state
 	settingsCursor   int // selected row in the settings list
@@ -470,9 +471,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.settingsSetStr = nil
 					if m.ConfigPath != "" {
 						if err := config.Save(m.ConfigPath, m.Settings); err != nil {
-							m.statusMsg = "config save: " + err.Error()
+							m.setStatus("config save: " + err.Error())
 						} else {
-							m.statusMsg = "saved config.toml"
+							m.setStatus("saved config.toml")
 						}
 					}
 				}
@@ -574,29 +575,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, textinput.Blink
 					case item.actionKey == "push_now":
 						if !m.Settings.Export.Enabled {
-							m.statusMsg = "export disabled — toggle Enabled in the Export Metrics section first"
+							m.setStatus("export disabled — toggle Enabled in the Export Metrics section first")
 							m.refreshViewport()
 							return m, nil
 						}
 						if m.Settings.Export.Endpoint == "" {
-							m.statusMsg = "no endpoint set — edit Endpoint in the Export Metrics section first"
+							m.setStatus("no endpoint set — edit Endpoint in the Export Metrics section first")
 							m.refreshViewport()
 							return m, nil
 						}
-						m.statusMsg = "pushing…"
+						m.setStatus("pushing…")
 						return m, m.pushNowCmd()
 					case item.actionKey == "apply_otel":
 						if !m.Settings.Export.ClaudeOTel.Enabled {
-							m.statusMsg = "claude_otel disabled — toggle Enabled in the Claude Code OTel section first"
+							m.setStatus("claude_otel disabled — toggle Enabled in the Claude Code OTel section first")
 							m.refreshViewport()
 							return m, nil
 						}
 						if m.Settings.Export.Endpoint == "" {
-							m.statusMsg = "no endpoint set — edit Endpoint in the Export Metrics section first"
+							m.setStatus("no endpoint set — edit Endpoint in the Export Metrics section first")
 							m.refreshViewport()
 							return m, nil
 						}
-						m.statusMsg = "applying OTel config…"
+						m.setStatus("applying OTel config…")
 						return m, m.applyOTelCmd()
 					}
 				}
@@ -629,13 +630,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 	case tickMsg:
+		if m.statusMsg != "" && time.Now().After(m.statusUntil) {
+			m.statusMsg = ""
+			m.refreshViewport()
+		}
 		cmds = append(cmds, refreshCmd(m), tickCmd())
 	case dayDetailMsg:
 		if msg.req != m.detailReq {
 			break // a later navigation already invalidated this request
 		}
 		if msg.err != nil {
-			m.statusMsg = "day detail: " + msg.err.Error()
+			m.setStatus("day detail: " + msg.err.Error())
 			m.viewMode = viewDayBrowse
 		} else {
 			m.dayDetail = msg.detail
@@ -647,7 +652,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break // a later navigation already invalidated this request
 		}
 		if msg.err != nil {
-			m.statusMsg = "session detail: " + msg.err.Error()
+			m.setStatus("session detail: " + msg.err.Error())
 			m.viewMode = viewSessionBrowse
 		} else {
 			m.sessDetail = msg.detail
@@ -656,29 +661,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 	case taskActionMsg:
 		if msg.err != nil {
-			m.statusMsg = "task error: " + msg.err.Error()
+			m.setStatus("task error: " + msg.err.Error())
 		} else {
-			m.statusMsg = msg.status
+			m.setStatus(msg.status)
 		}
 		cmds = append(cmds, refreshCmd(m))
 	case exportPushMsg:
 		if msg.err != nil {
-			m.statusMsg = "push failed: " + msg.err.Error()
+			m.setStatus("push failed: " + msg.err.Error())
 		} else {
-			m.statusMsg = fmt.Sprintf("pushed %d data points  %s → %s",
+			m.setStatus(fmt.Sprintf("pushed %d data points  %s → %s",
 				msg.result.DataPoints,
 				msg.result.PeriodFrom.Format("Jan 02 15:04"),
-				msg.result.PeriodTo.Format("Jan 02 15:04"))
+				msg.result.PeriodTo.Format("Jan 02 15:04")))
 		}
 		m.refreshViewport()
 	case pricingWarnMsg:
-		m.statusMsg = fmt.Sprintf("pricing has no entry for model %q", msg.model)
+		m.setStatus(fmt.Sprintf("pricing has no entry for model %q", msg.model))
 		m.refreshViewport()
 	case otelApplyMsg:
 		if msg.err != nil {
-			m.statusMsg = "otel-config failed: " + msg.err.Error()
+			m.setStatus("otel-config failed: " + msg.err.Error())
 		} else {
-			m.statusMsg = "OTel config written to ~/.claude/settings.json"
+			m.setStatus("OTel config written to ~/.claude/settings.json")
 		}
 		m.refreshViewport()
 	case refreshMsg:
@@ -716,6 +721,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// statusTTL is how long the status line keeps the last action's feedback
+// before a tick clears it. It is transient, not a permanent banner.
+const statusTTL = 8 * time.Second
+
+// setStatus shows s in the status line for statusTTL.
+func (m *Model) setStatus(s string) {
+	m.statusMsg = s
+	m.statusUntil = time.Now().Add(statusTTL)
 }
 
 // nextDetailReq invalidates any in-flight drill-down load and returns the id
@@ -955,9 +970,9 @@ func (m *Model) toggleSettingsItem() {
 	item.toggle(&m.Settings)
 	if m.ConfigPath != "" {
 		if err := config.Save(m.ConfigPath, m.Settings); err != nil {
-			m.statusMsg = "config save: " + err.Error()
+			m.setStatus("config save: " + err.Error())
 		} else {
-			m.statusMsg = "saved config.toml"
+			m.setStatus("saved config.toml")
 		}
 	}
 }
