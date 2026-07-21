@@ -15,6 +15,7 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -83,6 +84,10 @@ func (s *sessionState) setCumBaseline(t *tokenInfo) {
 // One Parser instance may be shared across multiple files for the same source;
 // state is keyed by sessionUUID so concurrent file processing is safe.
 type Parser struct {
+	// OnWarn, when set, receives one message per unknown rollout line type.
+	// Callers use it to surface schema drift; the default is to record it only.
+	OnWarn func(msg string)
+
 	mu       sync.Mutex
 	sessions map[string]*sessionState
 	warnOnce map[string]bool
@@ -263,17 +268,33 @@ func (p *Parser) getOrCreateSession(sessionUUID string) *sessionState {
 	return s
 }
 
-// warnOnceFor logs an unknown line type once per Parser instance.
+// warnOnceFor reports an unknown line type once per Parser instance. The line
+// is still skipped — the Codex format may add new types — but the drift is
+// recorded so it does not go unnoticed.
 func (p *Parser) warnOnceFor(lineType string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.warnOnce[lineType] {
+		p.mu.Unlock()
 		return
 	}
 	p.warnOnce[lineType] = true
-	// Soft warning: unknown Codex rollout line type. Skipping.
-	// This is intentional — the Codex format may add new types in future versions.
-	_ = lineType // suppress unused warning; real impl would log to stderr
+	warn := p.OnWarn
+	p.mu.Unlock()
+	if warn != nil {
+		warn(fmt.Sprintf("codex: unknown rollout line type %q — skipping", lineType))
+	}
+}
+
+// UnknownTypes returns the unknown rollout line types seen so far.
+func (p *Parser) UnknownTypes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, 0, len(p.warnOnce))
+	for t := range p.warnOnce {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // clamp returns max(0, v) to guard against underflow on malformed lines.
