@@ -309,7 +309,10 @@ func TestRemoveOTelConfig_RemovesManagedKeys(t *testing.T) {
 
 	// Also add a non-managed key.
 	s, _ := loadOrEmpty(path)
-	env := readEnvMap(s)
+	env, err := readEnvMap(s)
+	if err != nil {
+		t.Fatalf("readEnvMap: %v", err)
+	}
 	env["KEEP_ME"] = "yes"
 	writeEnvMap(path, s, env)
 
@@ -412,5 +415,56 @@ func TestStatusOTelConfig_NonExistentFile(t *testing.T) {
 	}
 	if status.Applied {
 		t.Error("Applied should be false for non-existent file")
+	}
+}
+
+// TestOTelConfig_UndecodableEnvBlock covers the merge contract: when the
+// existing "env" block cannot be decoded as map[string]string, the managed
+// operations must fail instead of overwriting the user's env vars.
+func TestOTelConfig_UndecodableEnvBlock(t *testing.T) {
+	const original = `{"env":{"KEEP_ME":"yes","PORT":8080}}`
+
+	tests := []struct {
+		name string
+		run  func(path string) error
+	}{
+		{
+			name: "apply",
+			run: func(path string) error {
+				return applyOTelConfigInput(path, OTelConfigInput{Endpoint: "http://localhost:4318"})
+			},
+		},
+		{
+			name: "remove",
+			run:  RemoveOTelConfig,
+		},
+		{
+			name: "status",
+			run: func(path string) error {
+				_, err := StatusOTelConfig(path)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "settings.json")
+			if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+				t.Fatalf("write settings: %v", err)
+			}
+
+			if err := tc.run(path); err == nil {
+				t.Error("want error for undecodable env block, got nil")
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read settings: %v", err)
+			}
+			if string(data) != original {
+				t.Errorf("settings.json was modified:\ngot  %s\nwant %s", data, original)
+			}
+		})
 	}
 }
