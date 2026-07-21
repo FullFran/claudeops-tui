@@ -76,12 +76,14 @@ func CostTrend(daily []store.DailyAgg) (Insight, bool) {
 	if len(daily) < 14 {
 		return Insight{}, false
 	}
-	// daily[0] is the most recent day (newest first expected by callers).
+	// daily is ordered oldest → newest (see store.DailyAggregatesLocal), so the
+	// two comparison windows are the tail of the series.
+	n := len(daily)
 	var thisWeekSum, lastWeekSum float64
-	for _, d := range daily[0:7] {
+	for _, d := range daily[n-7:] {
 		thisWeekSum += d.CostEUR
 	}
-	for _, d := range daily[7:14] {
+	for _, d := range daily[n-14 : n-7] {
 		lastWeekSum += d.CostEUR
 	}
 	thisWeekAvg := thisWeekSum / 7
