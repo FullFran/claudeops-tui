@@ -102,7 +102,7 @@ func (s *Store) PerModelAggregates(ctx context.Context, since time.Time) ([]Mode
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ModelAgg
 	for rows.Next() {
 		var m ModelAgg

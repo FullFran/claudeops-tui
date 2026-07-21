@@ -282,7 +282,7 @@ func (c *Client) fetch(ctx context.Context, token string) (Snapshot, int, time.D
 	if err != nil {
 		return Snapshot{}, 0, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return Snapshot{}, resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After")), nil
 	}
@@ -334,7 +334,7 @@ func (c *Client) refresh(ctx context.Context, creds *Credentials) error {
 	if err != nil {
 		return c.backoff(&backoffError{endpoint: "token endpoint", cause: err})
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		// Only the OAuth error statuses mean the grant is really gone;

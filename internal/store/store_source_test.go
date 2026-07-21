@@ -77,7 +77,7 @@ func TestSourceColumnMigration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 
 		has, err := s.columnExists("events", "source")
 		if err != nil {
@@ -135,7 +135,7 @@ func TestSourceColumnMigration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reopen: %v", err)
 		}
-		defer s1.Close()
+		defer func() { _ = s1.Close() }()
 
 		has, err := s1.columnExists("events", "source")
 		if err != nil {
@@ -161,7 +161,7 @@ func TestSourceColumnMigration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("second open: %v", err)
 		}
-		defer s2.Close()
+		defer func() { _ = s2.Close() }()
 
 		has, _ := s2.columnExists("events", "source")
 		if !has {
@@ -215,7 +215,7 @@ func TestSourceColumnMigration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reopen: %v", err)
 		}
-		defer s1.Close()
+		defer func() { _ = s1.Close() }()
 
 		var src string
 		if err := s1.db.QueryRow(`SELECT source FROM events WHERE uuid='u1'`).Scan(&src); err != nil {

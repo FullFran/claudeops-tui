@@ -132,7 +132,7 @@ func (c *Copilot) Fetch(ctx context.Context) (Usage, error) {
 	if err != nil {
 		return Usage{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return Usage{}, ErrCopilotAuthExpired

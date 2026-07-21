@@ -37,7 +37,7 @@ func (s *Store) GlobalHourlyAggregates(ctx context.Context, since time.Time) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []HourlyAgg
 	for rows.Next() {

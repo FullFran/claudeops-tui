@@ -24,7 +24,7 @@ func TestOpenReadOnlySkipsDDLAndSourceReadable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenReadOnly: %v", err)
 		}
-		defer ro.Close()
+		defer func() { _ = ro.Close() }()
 
 		// SELECT including the source column must succeed.
 		var n int
@@ -61,7 +61,7 @@ func TestOpenReadOnlySkipsDDLAndSourceReadable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenReadOnly: %v", err)
 		}
-		defer ro.Close()
+		defer func() { _ = ro.Close() }()
 
 		// If DDL ran in ro mode, SQLite would return an error because mode=ro
 		// rejects write operations. The fact that Open succeeded is the guard.
