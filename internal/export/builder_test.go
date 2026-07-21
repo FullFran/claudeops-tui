@@ -325,3 +325,85 @@ func TestBuildPayloadTokenTypeAttributeValues(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPayloadAttributesAreNotAliased(t *testing.T) {
+	from := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	// user_name + team_name (2 base attrs) and a project row without a source
+	// (1 project attr) leave spare capacity in the shared attribute slice.
+	d := PeriodData{
+		From:     from,
+		To:       to,
+		UserName: "alice",
+		TeamName: "platform",
+		ByProject: []store.ProjectPeriodAgg{
+			{ProjectName: "p", CostEUR: 1.0, InTokens: 10, OutTokens: 20, CacheReadTokens: 30, CacheCreateTokens: 40, Sessions: 1},
+		},
+	}
+
+	req := buildPayload(baseResource("alice"), d, testScope)
+	sm := req.ResourceMetrics[0].ScopeMetrics[0]
+
+	byName := map[string]*Metric{}
+	for i := range sm.Metrics {
+		byName[sm.Metrics[i].Name] = &sm.Metrics[i]
+	}
+
+	attrValue := func(dp NumberDataPoint, key string) (string, bool) {
+		for _, attr := range dp.Attributes {
+			if attr.Key == key {
+				if attr.Value.StringValue == nil {
+					return "", false
+				}
+				return *attr.Value.StringValue, true
+			}
+		}
+		return "", false
+	}
+
+	t.Run("each token data point keeps its own token_type", func(t *testing.T) {
+		tokens := byName["claudeops.tokens"]
+		if tokens == nil {
+			t.Fatal("missing claudeops.tokens metric")
+		}
+		want := map[string]int64{"input": 10, "output": 20, "cache_read": 30, "cache_creation": 40}
+		got := map[string]int64{}
+		for i, dp := range tokens.Sum.DataPoints {
+			ttype, ok := attrValue(dp, "token_type")
+			if !ok {
+				t.Fatalf("data point %d has no token_type attribute", i)
+			}
+			if _, dup := got[ttype]; dup {
+				t.Errorf("token_type %q appears on more than one data point", ttype)
+			}
+			if dp.AsInt == nil {
+				t.Fatalf("data point %d has no int value", i)
+			}
+			got[ttype] = *dp.AsInt
+		}
+		for ttype, wantVal := range want {
+			gotVal, ok := got[ttype]
+			if !ok {
+				t.Errorf("token_type %q missing", ttype)
+				continue
+			}
+			if gotVal != wantVal {
+				t.Errorf("token_type %q: value=%d, want %d", ttype, gotVal, wantVal)
+			}
+		}
+	})
+
+	t.Run("cost and session data points carry no token_type", func(t *testing.T) {
+		for _, name := range []string{"claudeops.cost", "claudeops.sessions"} {
+			m := byName[name]
+			if m == nil {
+				t.Fatalf("missing %s metric", name)
+			}
+			for i, dp := range m.Sum.DataPoints {
+				if _, ok := attrValue(dp, "token_type"); ok {
+					t.Errorf("%s data point %d unexpectedly carries token_type", name, i)
+				}
+			}
+		}
+	})
+}

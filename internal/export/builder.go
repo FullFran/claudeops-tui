@@ -1,6 +1,7 @@
 package export
 
 import (
+	"slices"
 	"strconv"
 	"time"
 
@@ -46,7 +47,8 @@ func buildPayload(resource Resource, d PeriodData, scope InstrumentationScope) e
 		if p.Source != "" {
 			projectAttrs = append(projectAttrs, strAttr("source", p.Source))
 		}
-		attrs := append(append([]KeyValue{}, baseAttrs...), projectAttrs...)
+		// Clipped so that per-point appends below never share a backing array.
+		attrs := slices.Clip(append(append([]KeyValue{}, baseAttrs...), projectAttrs...))
 
 		cost := p.CostEUR
 		costPoints = append(costPoints, NumberDataPoint{
