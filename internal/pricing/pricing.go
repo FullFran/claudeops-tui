@@ -220,6 +220,11 @@ func encodeTable(t *Table) []byte {
 	return buf.Bytes()
 }
 
+// nonBillableModels are pseudo-model ids that carry no API usage — Claude Code
+// reports "<synthetic>" for locally generated messages. They cost nothing and
+// have no price entry, so they stay NULL without a missing-model warning.
+var nonBillableModels = map[string]bool{"<synthetic>": true}
+
 // Calculator is a thin wrapper that warns once per unknown model and
 // computes a per-event cost from a Table.
 type Calculator struct {
@@ -244,6 +249,9 @@ func NewCalculator(t *Table) *Calculator {
 // event. Explicitly free variants ("…-free", "…:free") cost €0 unless the
 // table carries an exact entry for them.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
+	if nonBillableModels[model] {
+		return nil
+	}
 	if _, exact := c.t.Models[model]; !exact && IsFreeModelID(model) {
 		zero := 0.0
 		return &zero
