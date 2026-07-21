@@ -207,6 +207,20 @@ type otelApplyMsg struct {
 	err error
 }
 
+// pricingWarnMsg carries a pricing warning (unknown model) into the TUI.
+type pricingWarnMsg struct {
+	model string
+}
+
+// PricingWarnSink adapts a Bubbletea send function (tea.Program.Send) to
+// pricing.Calculator.OnWarn, so warnings render in the status line instead of
+// going to stderr, which would corrupt the alternate screen.
+func PricingWarnSink(send func(tea.Msg)) func(string) {
+	return func(model string) {
+		send(pricingWarnMsg{model: model})
+	}
+}
+
 func (m Model) pushNowCmd() tea.Cmd {
 	return func() tea.Msg {
 		if m.Store == nil {
@@ -656,6 +670,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				msg.result.PeriodFrom.Format("Jan 02 15:04"),
 				msg.result.PeriodTo.Format("Jan 02 15:04"))
 		}
+		m.refreshViewport()
+	case pricingWarnMsg:
+		m.statusMsg = fmt.Sprintf("pricing has no entry for model %q", msg.model)
 		m.refreshViewport()
 	case otelApplyMsg:
 		if msg.err != nil {
