@@ -93,6 +93,11 @@ type Model struct {
 	// session drill-down state
 	sessCursor int            // index into m.AllSess
 	sessDetail *SessionDetail // loaded on drill-down
+
+	// detailReq is bumped on every drill-down load and on every navigation
+	// away from one, so results that land late are dropped instead of
+	// dragging the user back into a detail view.
+	detailReq int
 }
 
 // viewMode tracks the drill-down level within a tab.
@@ -125,11 +130,12 @@ type SessionDetail struct {
 
 // sessionDetailMsg is the result of loading drill-down data for a single session.
 type sessionDetailMsg struct {
+	req    int
 	detail *SessionDetail
 	err    error
 }
 
-func loadSessionDetailCmd(s *store.Store, sess store.SessionAgg) tea.Cmd {
+func loadSessionDetailCmd(s *store.Store, sess store.SessionAgg, req int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -137,13 +143,13 @@ func loadSessionDetailCmd(s *store.Store, sess store.SessionAgg) tea.Cmd {
 		var err error
 		d.Models, err = s.ModelsForSession(ctx, sess.SessionID)
 		if err != nil {
-			return sessionDetailMsg{err: err}
+			return sessionDetailMsg{req: req, err: err}
 		}
 		d.Hourly, err = s.HourlyForSession(ctx, sess.SessionID)
 		if err != nil {
-			return sessionDetailMsg{err: err}
+			return sessionDetailMsg{req: req, err: err}
 		}
-		return sessionDetailMsg{detail: d}
+		return sessionDetailMsg{req: req, detail: d}
 	}
 }
 
@@ -230,11 +236,12 @@ func (m Model) applyOTelCmd() tea.Cmd {
 
 // dayDetailMsg is the result of loading drill-down data for a single day.
 type dayDetailMsg struct {
+	req    int
 	detail *DayDetail
 	err    error
 }
 
-func loadDayDetailCmd(s *store.Store, day time.Time, agg store.DailyAgg) tea.Cmd {
+func loadDayDetailCmd(s *store.Store, day time.Time, agg store.DailyAgg, req int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -242,17 +249,17 @@ func loadDayDetailCmd(s *store.Store, day time.Time, agg store.DailyAgg) tea.Cmd
 		var err error
 		d.Sessions, err = s.SessionsForDay(ctx, day)
 		if err != nil {
-			return dayDetailMsg{err: err}
+			return dayDetailMsg{req: req, err: err}
 		}
 		d.Models, err = s.ModelsForDay(ctx, day)
 		if err != nil {
-			return dayDetailMsg{err: err}
+			return dayDetailMsg{req: req, err: err}
 		}
 		d.Hourly, err = s.HourlyForDay(ctx, day)
 		if err != nil {
-			return dayDetailMsg{err: err}
+			return dayDetailMsg{req: req, err: err}
 		}
-		return dayDetailMsg{detail: d}
+		return dayDetailMsg{req: req, detail: d}
 	}
 }
 
@@ -610,6 +617,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds = append(cmds, refreshCmd(m), tickCmd())
 	case dayDetailMsg:
+		if msg.req != m.detailReq {
+			break // a later navigation already invalidated this request
+		}
 		if msg.err != nil {
 			m.statusMsg = "day detail: " + msg.err.Error()
 			m.viewMode = viewDayBrowse
@@ -619,6 +629,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 	case sessionDetailMsg:
+		if msg.req != m.detailReq {
+			break // a later navigation already invalidated this request
+		}
 		if msg.err != nil {
 			m.statusMsg = "session detail: " + msg.err.Error()
 			m.viewMode = viewSessionBrowse
@@ -688,10 +701,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// nextDetailReq invalidates any in-flight drill-down load and returns the id
+// to stamp on the new one.
+func (m *Model) nextDetailReq() int {
+	m.detailReq++
+	return m.detailReq
+}
+
 // selectTab switches to t, leaving any drill-down behind.
 func (m *Model) selectTab(t Tab) {
 	m.activeTab = t
 	m.viewMode = viewNormal
+	m.detailReq++
 	if t == TabSettings {
 		m.settingsCursor = firstSettingsRow()
 	}
@@ -741,6 +762,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "q":
 			m.viewMode = viewNormal
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		case "j", "down":
@@ -760,7 +782,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.dayCursor >= 0 && m.dayCursor < len(m.Daily) && m.Store != nil {
 				day := m.Daily[m.dayCursor]
-				return m, loadDayDetailCmd(m.Store, day.Date, day)
+				return m, loadDayDetailCmd(m.Store, day.Date, day, m.nextDetailReq())
 			}
 		}
 	case viewDayDetail:
@@ -768,6 +790,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			m.viewMode = viewDayBrowse
 			m.dayDetail = nil
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		}
@@ -775,6 +798,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "q":
 			m.viewMode = viewNormal
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		case "j", "down":
@@ -791,7 +815,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.sessCursor >= 0 && m.sessCursor < len(m.AllSess) && m.Store != nil {
-				return m, loadSessionDetailCmd(m.Store, m.AllSess[m.sessCursor])
+				return m, loadSessionDetailCmd(m.Store, m.AllSess[m.sessCursor], m.nextDetailReq())
 			}
 		}
 	case viewSessionDetail:
@@ -799,6 +823,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			m.viewMode = viewSessionBrowse
 			m.sessDetail = nil
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		}
