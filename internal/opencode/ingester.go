@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -32,6 +33,9 @@ type Ingester struct {
 	wm           WatermarkStore
 	sink         source.Sink
 	pollInterval time.Duration
+
+	mu      sync.Mutex
+	lastErr error
 }
 
 // NewIngester creates an Ingester targeting the opencode DB at dbPath.
@@ -46,6 +50,23 @@ func NewIngester(dbPath string, wm WatermarkStore, sink source.Sink) *Ingester {
 
 // Name implements source.Ingester.
 func (ing *Ingester) Name() source.Name { return source.Opencode }
+
+// LastErr reports the outcome of the most recent poll: nil when it completed,
+// otherwise the failure that aborted it. Watch discards poll's return value, so
+// this is how a persistent failure (schema drift, unreadable DB) stays visible.
+func (ing *Ingester) LastErr() error {
+	ing.mu.Lock()
+	defer ing.mu.Unlock()
+	return ing.lastErr
+}
+
+// setErr records the outcome of a poll and returns it unchanged.
+func (ing *Ingester) setErr(err error) error {
+	ing.mu.Lock()
+	ing.lastErr = err
+	ing.mu.Unlock()
+	return err
+}
 
 // IngestExisting implements source.Ingester: one-shot drain from the watermark.
 func (ing *Ingester) IngestExisting(ctx context.Context) error {
@@ -66,16 +87,23 @@ func (ing *Ingester) Watch(ctx context.Context) error {
 
 // poll opens the DB read-only, queries rows past the watermark, decodes and emits.
 func (ing *Ingester) poll(ctx context.Context) error {
+	if _, err := os.Stat(ing.dbPath); err != nil {
+		if os.IsNotExist(err) {
+			// opencode is not installed — a legitimate no-op, not a failure.
+			return ing.setErr(nil)
+		}
+		return ing.setErr(fmt.Errorf("opencode: stat db: %w", err))
+	}
+
 	db, err := ing.openReadOnly()
 	if err != nil {
-		// DB does not exist or is not accessible — skip silently.
-		return nil
+		return ing.setErr(fmt.Errorf("opencode: open db: %w", err))
 	}
 	defer db.Close()
 
 	pos, err := ing.wm.LoadSourceWatermark("opencode")
 	if err != nil {
-		return fmt.Errorf("opencode: load watermark: %w", err)
+		return ing.setErr(fmt.Errorf("opencode: load watermark: %w", err))
 	}
 
 	var watermark int64
@@ -87,21 +115,26 @@ func (ing *Ingester) poll(ctx context.Context) error {
 		}
 	}
 
+	// The predicate is inclusive: rows sharing the watermark's time_created are
+	// re-read on every poll. That covers rows committed after the previous
+	// snapshot at the same millisecond, and lets the store's corrective upsert
+	// repair a row whose token counts were still being written when first read.
+	// Re-reads are free — the store dedups on uuid.
 	rows, err := db.QueryContext(ctx, `
 		SELECT m.id, m.session_id, m.time_created, m.data, COALESCE(s.directory, '')
 		FROM message m
 		LEFT JOIN session s ON s.id = m.session_id
-		WHERE m.time_created > ?
+		WHERE m.time_created >= ?
 		ORDER BY m.time_created ASC`,
 		watermark,
 	)
 	if err != nil {
-		// Transient DB error (SQLITE_BUSY, etc.) — skip this poll.
-		return nil
+		return ing.setErr(fmt.Errorf("opencode: query messages: %w", err))
 	}
 	defer rows.Close()
 
 	var maxTC int64 = watermark
+	var emitErr error
 	for rows.Next() {
 		var msgID, sessionID, rawData, directory string
 		var timeCreated int64
@@ -146,25 +179,29 @@ func (ing *Ingester) poll(ctx context.Context) error {
 		}
 
 		if err := ing.sink.Emit(ctx, r); err != nil {
-			// Non-fatal: a single emit failure (e.g. dedup) should not stop the poll.
-			_ = err
+			// Stop here so the watermark never moves past a row we failed to
+			// emit; the next poll retries it (dedup makes the retry idempotent).
+			emitErr = fmt.Errorf("opencode: emit %s: %w", r.UUID, err)
+			break
 		}
 
 		if timeCreated > maxTC {
 			maxTC = timeCreated
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil // transient, skip
+	if emitErr == nil {
+		if err := rows.Err(); err != nil {
+			return ing.setErr(fmt.Errorf("opencode: scan messages: %w", err))
+		}
 	}
 
 	// Advance watermark if we saw any rows.
 	if maxTC > watermark {
 		if err := ing.wm.SaveSourceWatermark("opencode", strconv.FormatInt(maxTC, 10)); err != nil {
-			return fmt.Errorf("opencode: save watermark: %w", err)
+			return ing.setErr(fmt.Errorf("opencode: save watermark: %w", err))
 		}
 	}
-	return nil
+	return ing.setErr(emitErr)
 }
 
 // openReadOnly opens the opencode DB in read-only WAL mode via modernc.org/sqlite.
