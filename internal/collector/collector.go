@@ -49,6 +49,7 @@ type Collector struct {
 	parseErrors atomic.Int64
 	unknown     atomic.Int64
 	ingested    atomic.Int64
+	emitErrors  atomic.Int64
 
 	mu       sync.Mutex
 	watching map[string]bool // file path → true
@@ -100,6 +101,9 @@ func (c *Collector) ParseErrorCount() int64 { return c.parseErrors.Load() }
 
 // UnknownCount returns the number of unknown event types skipped.
 func (c *Collector) UnknownCount() int64 { return c.unknown.Load() }
+
+// EmitErrorCount returns the number of events whose write to the sink failed.
+func (c *Collector) EmitErrorCount() int64 { return c.emitErrors.Load() }
 
 // IngestExisting walks `root` once and ingests every JSONL file found,
 // honoring persisted offsets so it can be called repeatedly.
@@ -182,7 +186,11 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 			// unconsumed so the next pass re-reads the line whole.
 			break
 		}
-		c.handleLine(ctx, path, off, line)
+		if !c.handleLine(ctx, path, off, line) {
+			// The sink refused an event for a reason that may clear up: hold
+			// the offset at this line so the next pass retries it.
+			break
+		}
 		off += int64(len(line))
 		if errors.Is(err, io.EOF) {
 			break
@@ -196,13 +204,16 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 	return c.saveOffset(path, off, size)
 }
 
-func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64, line []byte) {
+// handleLine processes one newline-terminated line. It reports false when the
+// line could not be persisted for a reason that may clear up later, so the
+// caller keeps the offset at this line instead of skipping the event.
+func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64, line []byte) bool {
 	// strip trailing newline before parsing
 	for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
 		line = line[:len(line)-1]
 	}
 	if len(line) == 0 {
-		return
+		return true
 	}
 
 	// Source-seam path: use LineParser + Sink.
@@ -214,38 +225,55 @@ func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64
 		records, err := c.lineParser.ParseLine(line, lctx)
 		if err != nil {
 			c.parseErrors.Add(1)
-			return
+			return true
 		}
 		for _, r := range records {
-			if err := c.sink.Emit(ctx, r); err == nil {
-				c.ingested.Add(1)
+			if isPermanentReject(r) {
+				c.emitErrors.Add(1)
+				continue
 			}
+			if err := c.sink.Emit(ctx, r); err != nil {
+				c.emitErrors.Add(1)
+				return false
+			}
+			c.ingested.Add(1)
 		}
 		if len(records) == 0 {
 			// Unknown/no-usage line — count as unknown.
 			c.unknown.Add(1)
 		}
-		return
+		return true
 	}
 
 	// Legacy path: direct parser + store (unchanged behavior).
 	ev, err := parser.ParseLine(line)
 	if err != nil {
 		c.parseErrors.Add(1)
-		return
+		return true
 	}
 	switch e := ev.(type) {
 	case parser.AssistantEvent:
-		c.persistAssistant(ctx, e)
+		return c.persistAssistant(ctx, e)
 	case parser.UnknownEvent:
 		c.unknown.Add(1)
 	case parser.UserEvent:
 		// no cost; we still record presence so dashboard can count prompts later
-		c.persistUser(ctx, e)
+		return c.persistUser(ctx, e)
 	}
+	return true
 }
 
-func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEvent) {
+// isPermanentReject reports whether a record can never be stored, however many
+// times it is retried. Those events are dropped so one malformed line cannot
+// stall a whole file.
+func isPermanentReject(r source.Record) bool {
+	if r.UUID == "" || r.SessionID == "" {
+		return true
+	}
+	return r.Source == source.Claude && r.CWD == ""
+}
+
+func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEvent) bool {
 	se := store.Event{
 		UUID:              e.DedupUUID(),
 		SessionID:         e.Session,
@@ -263,12 +291,10 @@ func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEven
 		cost = c.calc.CostFor(e.Model, e.InTokens, e.OutTokens, e.CacheReadTokens, e.CacheCreateTokens)
 	}
 	taskID := c.tasks.Resolve(e.Session, e.TS)
-	if err := c.store.Insert(ctx, se, cost, taskID); err == nil {
-		c.ingested.Add(1)
-	}
+	return c.insert(ctx, se, cost, taskID)
 }
 
-func (c *Collector) persistUser(ctx context.Context, e parser.UserEvent) {
+func (c *Collector) persistUser(ctx context.Context, e parser.UserEvent) bool {
 	se := store.Event{
 		UUID:      e.UUID,
 		SessionID: e.Session,
@@ -276,7 +302,20 @@ func (c *Collector) persistUser(ctx context.Context, e parser.UserEvent) {
 		Type:      "user",
 		TS:        e.TS,
 	}
-	if err := c.store.Insert(ctx, se, nil, c.tasks.Resolve(e.Session, e.TS)); err == nil {
-		c.ingested.Add(1)
+	return c.insert(ctx, se, nil, c.tasks.Resolve(e.Session, e.TS))
+}
+
+// insert writes one event through the legacy store path, applying the same
+// permanent-reject rule as the source-seam path.
+func (c *Collector) insert(ctx context.Context, se store.Event, cost *float64, taskID *string) bool {
+	if se.UUID == "" || se.SessionID == "" || se.CWD == "" {
+		c.emitErrors.Add(1)
+		return true
 	}
+	if err := c.store.Insert(ctx, se, cost, taskID); err != nil {
+		c.emitErrors.Add(1)
+		return false
+	}
+	c.ingested.Add(1)
+	return true
 }
