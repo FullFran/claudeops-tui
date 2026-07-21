@@ -620,8 +620,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Reserve 4 lines for tab bar + footer.
-		vpH := msg.Height - 4
+		// Reserve the chrome View() always draws: title, tab bar, rule,
+		// spacer and footer.
+		vpH := msg.Height - chromeLines
 		if vpH < 5 {
 			vpH = 5
 		}
