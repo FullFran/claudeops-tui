@@ -12,7 +12,7 @@ Shows **real** subscription % from Anthropic's `/api/oauth/usage` endpoint — n
 - Computes per-event cost in € using a **four-class** token breakdown (input, output, cache_read, cache_create) — collapsing them ruins the math
 - Calls Anthropic's undocumented `GET /api/oauth/usage` for the real session/weekly/per-model usage that Claude Code's own `/usage` command uses, with OAuth token refresh
 - Tracks live quota for other services too (Codex, Copilot, Gemini, plus your own HTTP providers) — see [`docs/providers.md`](./docs/providers.md)
-- Tracks tasks via `claudeops task start "name"` and attributes events to them by `(sessionId, timestamp window)`
+- Tracks tasks via `claudeops task start "name"` and attributes every event ingested while the task is active to it (time-window based, across all sessions — see [`docs/limitations.md`](./docs/limitations.md))
 - **Session drill-down** — navigate into any session to see per-model costs, hourly activity, token breakdown with cache hit ratio, and duration
 - **Daily drill-down** — browse daily aggregates with hourly charts and per-model breakdown
 - **Insights engine** — 5 computed insights: cache efficiency, model mix, cost trend, session efficiency, peak hours
