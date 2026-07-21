@@ -18,11 +18,89 @@ type Credentials struct {
 	Other         map[string]json.RawMessage `json:"-"`
 }
 
-// OAuthBlock holds the access/refresh tokens.
+// OAuthBlock holds the access/refresh tokens. Fields we do not model (scopes,
+// subscriptionType, rateLimitTier, ...) are kept verbatim in Other so a refresh
+// never strips them from the file Claude Code shares with us.
 type OAuthBlock struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	ExpiresAt    int64  `json:"expiresAt"` // unix seconds
+	AccessToken  string
+	RefreshToken string
+	// ExpiresAt is the raw on-disk value, whose unit is given by Millis.
+	// Claude Code writes milliseconds; older claudeops installs wrote seconds.
+	ExpiresAt int64
+	Millis    bool
+	Other     map[string]json.RawMessage
+}
+
+// millisThreshold separates epoch seconds from epoch milliseconds: any value
+// above it is far beyond a plausible seconds timestamp (year 5138).
+const millisThreshold = 1e11
+
+// UnmarshalJSON decodes the block, detecting the expiresAt unit and retaining
+// every other field untouched.
+func (o *OAuthBlock) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	*o = OAuthBlock{Other: map[string]json.RawMessage{}, Millis: true}
+	for k, v := range raw {
+		switch k {
+		case "accessToken":
+			if err := json.Unmarshal(v, &o.AccessToken); err != nil {
+				return err
+			}
+		case "refreshToken":
+			if err := json.Unmarshal(v, &o.RefreshToken); err != nil {
+				return err
+			}
+		case "expiresAt":
+			if err := json.Unmarshal(v, &o.ExpiresAt); err != nil {
+				return err
+			}
+			o.Millis = o.ExpiresAt >= millisThreshold
+		default:
+			o.Other[k] = v
+		}
+	}
+	return nil
+}
+
+// MarshalJSON re-assembles the block, overwriting only the fields we own.
+func (o OAuthBlock) MarshalJSON() ([]byte, error) {
+	out := map[string]json.RawMessage{}
+	for k, v := range o.Other {
+		out[k] = v
+	}
+	for k, v := range map[string]any{
+		"accessToken":  o.AccessToken,
+		"refreshToken": o.RefreshToken,
+		"expiresAt":    o.ExpiresAt,
+	} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		out[k] = b
+	}
+	return json.Marshal(out)
+}
+
+// ExpiresAtTime converts the raw expiresAt value using its detected unit.
+func (o *OAuthBlock) ExpiresAtTime() time.Time {
+	if o.Millis {
+		return time.UnixMilli(o.ExpiresAt)
+	}
+	return time.Unix(o.ExpiresAt, 0)
+}
+
+// SetExpiresAt stores t in whatever unit the file already used, so we never
+// hand Claude Code a value in a unit it does not expect.
+func (o *OAuthBlock) SetExpiresAt(t time.Time) {
+	if o.Millis {
+		o.ExpiresAt = t.UnixMilli()
+		return
+	}
+	o.ExpiresAt = t.Unix()
 }
 
 // ErrNoOAuth means the user is not logged into a Pro/Max plan via OAuth.
@@ -61,8 +139,7 @@ func (c *Credentials) IsExpired(skew time.Duration) bool {
 	if c.ClaudeAiOauth == nil {
 		return true
 	}
-	exp := time.Unix(c.ClaudeAiOauth.ExpiresAt, 0)
-	return time.Now().Add(skew).After(exp)
+	return time.Now().Add(skew).After(c.ClaudeAiOauth.ExpiresAtTime())
 }
 
 // SaveCredentials writes credentials atomically: temp file in the same dir,
