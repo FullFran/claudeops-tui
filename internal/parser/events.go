@@ -41,7 +41,10 @@ type AssistantEvent struct {
 	InTokens          int64
 	OutTokens         int64
 	CacheReadTokens   int64
-	CacheCreateTokens int64
+	CacheCreateTokens int64 // total cache writes, both TTLs
+	// CacheCreate1hTokens is the 1-hour-TTL portion of CacheCreateTokens.
+	// Anthropic bills it at input x 2 instead of the 5m rate of input x 1.25.
+	CacheCreate1hTokens int64
 }
 
 // DedupUUID returns the identity to store the event under. Claude Code writes
@@ -86,6 +89,11 @@ type rawAssistant struct {
 			Output      int64 `json:"output_tokens"`
 			CacheCreate int64 `json:"cache_creation_input_tokens"`
 			CacheRead   int64 `json:"cache_read_input_tokens"`
+			// Per-TTL breakdown of CacheCreate. Absent on older lines.
+			CacheCreation struct {
+				Ephemeral5m int64 `json:"ephemeral_5m_input_tokens"`
+				Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
+			} `json:"cache_creation"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -107,15 +115,20 @@ func ParseLine(b []byte) (Event, error) {
 		if err := json.Unmarshal(b, &r); err != nil {
 			return nil, err
 		}
+		cacheCreate := r.Message.Usage.CacheCreate
+		if cacheCreate == 0 {
+			cacheCreate = r.Message.Usage.CacheCreation.Ephemeral5m + r.Message.Usage.CacheCreation.Ephemeral1h
+		}
 		return AssistantEvent{
-			Common:            r.Common,
-			Model:             r.Message.Model,
-			MessageID:         r.Message.ID,
-			RequestID:         r.RequestID,
-			InTokens:          r.Message.Usage.Input,
-			OutTokens:         r.Message.Usage.Output,
-			CacheReadTokens:   r.Message.Usage.CacheRead,
-			CacheCreateTokens: r.Message.Usage.CacheCreate,
+			Common:              r.Common,
+			Model:               r.Message.Model,
+			MessageID:           r.Message.ID,
+			RequestID:           r.RequestID,
+			InTokens:            r.Message.Usage.Input,
+			OutTokens:           r.Message.Usage.Output,
+			CacheReadTokens:     r.Message.Usage.CacheRead,
+			CacheCreateTokens:   cacheCreate,
+			CacheCreate1hTokens: r.Message.Usage.CacheCreation.Ephemeral1h,
 		}, nil
 	case "user":
 		return UserEvent{Common: c}, nil

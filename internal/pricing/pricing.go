@@ -54,11 +54,15 @@ func litellmFallback() map[string]ModelPrice {
 }
 
 // ModelPrice is the EUR cost per 1,000,000 tokens for each class.
+// CacheCreate is the 5-minute-TTL cache-write rate; CacheCreate1h is the
+// 1-hour-TTL one and is optional — when absent it derives from Input (see
+// cacheCreate1hRate).
 type ModelPrice struct {
-	Input       float64 `toml:"input"`
-	Output      float64 `toml:"output"`
-	CacheRead   float64 `toml:"cache_read"`
-	CacheCreate float64 `toml:"cache_create"`
+	Input         float64 `toml:"input"`
+	Output        float64 `toml:"output"`
+	CacheRead     float64 `toml:"cache_read"`
+	CacheCreate   float64 `toml:"cache_create"`
+	CacheCreate1h float64 `toml:"cache_create_1h"`
 }
 
 // Table is the parsed pricing.toml.
@@ -212,6 +216,9 @@ func encodeTable(t *Table) []byte {
 		fmt.Fprintf(&buf, "output        = %5.4f\n", price.Output)
 		fmt.Fprintf(&buf, "cache_read    = %5.4f\n", price.CacheRead)
 		fmt.Fprintf(&buf, "cache_create  = %5.4f\n", price.CacheCreate)
+		if price.CacheCreate1h > 0 {
+			fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", price.CacheCreate1h)
+		}
 		if i < len(models)-1 {
 			buf.WriteString("\n")
 		}
@@ -249,6 +256,15 @@ func NewCalculator(t *Table) *Calculator {
 // event. Explicitly free variants ("…-free", "…:free") cost €0 unless the
 // table carries an exact entry for them.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
+	return c.CostForCacheTTL(model, in, out, cacheRead, cacheCreate, 0)
+}
+
+// CostForCacheTTL is CostFor with the 1-hour-TTL portion of the cache writes
+// split out. cacheCreate is the total number of cache-write tokens and
+// cacheCreate1h the part of it written with a 1h TTL, which Anthropic bills at
+// roughly 1.6x the 5m rate. When cacheCreate1h exceeds cacheCreate the 5m
+// remainder floors at zero.
+func (c *Calculator) CostForCacheTTL(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64) *float64 {
 	if nonBillableModels[model] {
 		return nil
 	}
@@ -275,11 +291,31 @@ func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64
 		c.mu.Unlock()
 		return nil
 	}
+	cacheCreate5m := cacheCreate - cacheCreate1h
+	if cacheCreate5m < 0 {
+		cacheCreate5m = 0
+	}
 	cost := perMillion(in, mp.Input) +
 		perMillion(out, mp.Output) +
 		perMillion(cacheRead, mp.CacheRead) +
-		perMillion(cacheCreate, mp.CacheCreate)
+		perMillion(cacheCreate5m, mp.CacheCreate) +
+		perMillion(cacheCreate1h, cacheCreate1hRate(mp))
 	return &cost
+}
+
+// cacheCreate1hRate returns the 1-hour-TTL cache-write rate. Anthropic prices
+// it at input x 2 (against input x 1.25 for 5m), so when the table carries no
+// explicit cache_create_1h we derive it from input, falling back to 1.6x the
+// 5m rate for tables that only price the cache classes.
+func cacheCreate1hRate(mp ModelPrice) float64 {
+	switch {
+	case mp.CacheCreate1h > 0:
+		return mp.CacheCreate1h
+	case mp.Input > 0:
+		return mp.Input * 2
+	default:
+		return mp.CacheCreate * 1.6
+	}
 }
 
 // lookupPrice finds a model's price in `table`, trying every form
