@@ -10,13 +10,30 @@ up under **Subscription usage** on the Dashboard; if not, it is skipped silently
 | Provider | Endpoint | Credential source |
 | --- | --- | --- |
 | **Claude** (Anthropic) | `api.anthropic.com/api/oauth/usage` | `~/.claude/.credentials.json` (OAuth) |
-| **Codex** (ChatGPT) | `chatgpt.com/backend-api/wham/usage` | `~/.codex/auth.json`, **or** opencode's `openai` OAuth session |
+| **Codex** (ChatGPT) | `chatgpt.com/backend-api/wham/usage` | `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`), **or** opencode's `openai` OAuth session |
 | **Copilot** (GitHub) | `api.github.com/copilot_internal/user` | `~/.config/github-copilot/apps.json` |
 | **Gemini** (Google) | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` | `~/.gemini/oauth_creds.json`, **or** opencode's `google` OAuth session |
 
 The Claude and Codex providers are verified end-to-end. Copilot and Gemini
 follow the documented endpoints and are covered by fixture tests; validate them
 against a live account before relying on the exact numbers.
+
+Claude is not a registry provider: it is rendered by the dedicated
+`internal/usage` client, with its own cache and refresh logic. Codex, Copilot,
+Gemini and any custom provider go through `provider.Registry`.
+
+Press `p` on the Dashboard to cycle the subscription focus (All → each provider
+→ All) when more than one provider reports data.
+
+## Polling, caching and backoff
+
+The TUI ticks every 2s, so the registry caches aggressively:
+
+- A successful snapshot is reused for **5 minutes**.
+- A failing provider is skipped for **1 minute**, doubling per consecutive
+  failure up to **15 minutes**, then retried.
+- Failures are per provider: one broken endpoint renders its own error line and
+  never blocks the others.
 
 ### Reusing an opencode session
 
