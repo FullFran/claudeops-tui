@@ -73,7 +73,7 @@ $CODEX_HOME/sessions/**/*.jsonl       (codex, default ~/.codex/sessions)
 - **hooks** — installs and removes claudeops entries for the `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` events in `~/.claude/settings.json`, and handles those events on stdin.
 - **export** — OTLP metric push (`claudeops push`) and management of the Claude Code OTel env vars in `~/.claude/settings.json` (`claudeops otel-config`).
 - **insights** — 5 computed insights: cache efficiency, model mix, cost trend, session efficiency, peak hours.
-- **tasks** — Sidecar `current-task.json` for task attribution. `Resolve(sessionID, ts)` correlates events to the active task.
+- **tasks** — Sidecar `current-task.json` for task attribution. `Resolve(_ string, ts)` attributes an event to whichever task was active at `ts`; the session id parameter is accepted for call-site symmetry but ignored.
 - **tui** — Bubbletea multi-tab dashboard (8 tabs). Single Model struct with view modes (Normal → DayBrowse → DayDetail → SessionBrowse → SessionDetail). Viewport-based scrolling. Help overlay, task input modal, and inline settings editing.
 - **mcpserver** — MCP protocol handler over stdio. 7 tools. Uses read-only store.
 - **config** — TOML settings in `~/.claudeops/config.toml`. `Paths` resolves every file claudeops reads or writes and creates the data dir.

@@ -39,7 +39,7 @@ opencode.db ──5s poll──→ opencode.Ingester ─────────
                                                               source.StoreSink
                                                                         │
                                               pricing.Calculate ────────┤
-                                     tasks.Resolve(sessionId, ts) ──────┤
+                                     tasks.Resolve(_, ts)       ──────┤
                                                                         ▼
                                                           store.Insert ──→ SQLite (WAL)
                                                                               │

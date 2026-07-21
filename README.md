@@ -362,7 +362,7 @@ show_session_efficiency = true
 show_peak_hours = true
 
 [keybindings]
-command_palette = "ctrl+p"
+command_palette = "ctrl+p"     # reserved; no command palette is implemented yet
 
 [export]
 enabled = false               # push metrics to an OTLP endpoint
