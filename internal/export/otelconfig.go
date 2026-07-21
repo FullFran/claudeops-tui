@@ -57,7 +57,10 @@ func applyOTelConfigInput(settingsPath string, cfg OTelConfigInput) error {
 	if err != nil {
 		return err
 	}
-	envMap := readEnvMap(s)
+	envMap, err := readEnvMap(s)
+	if err != nil {
+		return err
+	}
 
 	// Always set core keys.
 	envMap["CLAUDE_CODE_ENABLE_TELEMETRY"] = "1"
@@ -98,7 +101,10 @@ func RemoveOTelConfig(settingsPath string) error {
 	if err != nil {
 		return err
 	}
-	envMap := readEnvMap(s)
+	envMap, err := readEnvMap(s)
+	if err != nil {
+		return err
+	}
 	changed := false
 	for _, k := range ManagedOTelKeys {
 		if _, ok := envMap[k]; ok {
@@ -119,7 +125,10 @@ func StatusOTelConfig(settingsPath string) (OTelConfigStatus, error) {
 	if err != nil {
 		return OTelConfigStatus{}, err
 	}
-	envMap := readEnvMap(s)
+	envMap, err := readEnvMap(s)
+	if err != nil {
+		return OTelConfigStatus{}, err
+	}
 	vals := map[string]string{}
 	for _, k := range ManagedOTelKeys {
 		if v, ok := envMap[k]; ok {
@@ -142,13 +151,17 @@ func loadOrEmpty(path string) (*hooks.Settings, error) {
 	return s, nil
 }
 
-// readEnvMap extracts the "env" map[string]string from Settings.Extra.
-func readEnvMap(s *hooks.Settings) map[string]string {
+// readEnvMap extracts the "env" map[string]string from Settings.Extra. An
+// undecodable block is an error rather than an empty map, so callers never
+// overwrite env vars they failed to read.
+func readEnvMap(s *hooks.Settings) (map[string]string, error) {
 	m := map[string]string{}
 	if raw, ok := s.Extra["env"]; ok {
-		_ = json.Unmarshal(raw, &m)
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil, fmt.Errorf("otelconfig: decode env block: %w", err)
+		}
 	}
-	return m
+	return m, nil
 }
 
 // writeEnvMap serializes envMap back into Settings.Extra["env"] and saves.

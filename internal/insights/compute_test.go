@@ -139,10 +139,25 @@ func TestModelMix(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCostTrend(t *testing.T) {
+	// costs are ordered oldest → newest, matching store.DailyAggregatesLocal.
 	makeDays := func(costs []float64) []store.DailyAgg {
 		out := make([]store.DailyAgg, len(costs))
 		for i, c := range costs {
 			out[i] = store.DailyAgg{CostEUR: c}
+		}
+		return out
+	}
+	repeat := func(c float64, n int) []float64 {
+		out := make([]float64, n)
+		for i := range out {
+			out[i] = c
+		}
+		return out
+	}
+	concat := func(parts ...[]float64) []float64 {
+		var out []float64
+		for _, p := range parts {
+			out = append(out, p...)
 		}
 		return out
 	}
@@ -161,10 +176,10 @@ func TestCostTrend(t *testing.T) {
 		},
 		{
 			name: "60 percent increase gives Warn",
-			// days[0..6]: this week (most recent), days[7..13]: last week
+			// days[0..6]: last week (older), days[7..13]: this week (most recent)
 			daily: makeDays([]float64{
-				1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6,
 				1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+				1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6,
 			}),
 			wantOk:      true,
 			wantSev:     insights.Warn,
@@ -173,8 +188,8 @@ func TestCostTrend(t *testing.T) {
 		{
 			name: "20 percent increase gives Info",
 			daily: makeDays([]float64{
-				1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2,
 				1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+				1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2,
 			}),
 			wantOk:      true,
 			wantSev:     insights.Info,
@@ -183,8 +198,8 @@ func TestCostTrend(t *testing.T) {
 		{
 			name: "decrease gives Info",
 			daily: makeDays([]float64{
-				0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9,
 				1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+				0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9,
 			}),
 			wantOk:      true,
 			wantSev:     insights.Info,
@@ -192,8 +207,32 @@ func TestCostTrend(t *testing.T) {
 		},
 		{
 			name:   "last week zero skips",
-			daily:  makeDays([]float64{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0, 0, 0, 0, 0, 0, 0}),
+			daily:  makeDays([]float64{0, 0, 0, 0, 0, 0, 0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}),
 			wantOk: false,
+		},
+		{
+			// 30-day series (what the TUI and MCP server pass): only the last
+			// 14 entries may be considered, and the newest 7 are "this week".
+			name: "spike in most recent week of a 30 day series gives Warn",
+			daily: makeDays(concat(
+				repeat(100.0, 16),
+				repeat(0.001, 7),
+				repeat(5.0, 7),
+			)),
+			wantOk:      true,
+			wantSev:     insights.Warn,
+			wantTitleRE: "Cost up",
+		},
+		{
+			name: "drop in most recent week of a 30 day series gives Cost down",
+			daily: makeDays(concat(
+				repeat(0.001, 16),
+				repeat(5.0, 7),
+				repeat(1.0, 7),
+			)),
+			wantOk:      true,
+			wantSev:     insights.Info,
+			wantTitleRE: "Cost down",
 		},
 	}
 
