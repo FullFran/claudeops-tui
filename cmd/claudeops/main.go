@@ -344,24 +344,42 @@ func cmdTUI() error {
 	// opencode DB-poller: independent of the Collector loop.
 	ocIng := buildOpencodeIngester(srcs, c.store, sink)
 
+	// The program is built before ingestion starts so pricing warnings can be
+	// routed into it first — see wirePricingWarnings for why the order matters.
+	prog := tea.NewProgram(buildTUIModel(p, settings, c), tea.WithAltScreen())
+	wirePricingWarnings(c, prog.Send)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// A dead watcher or a write that never succeeds otherwise looks exactly
+	// like an idle machine, so both are recorded and reported on the way out.
+	var health collectorHealth
 	for _, nc := range cols {
 		nc := nc // capture
-		go func() {
-			// Best-effort: cold ingest, then watch.
-			_ = nc.col.Watch(ctx)
-		}()
+		go superviseWatch(ctx, nc.name, nc.col.Watch, &health)
+		go superviseEmitErrors(ctx, nc.name, nc.col, &health, stallInterval)
 	}
 	if ocIng != nil {
-		go func() {
-			_ = ocIng.Watch(ctx)
-		}()
+		go superviseWatch(ctx, ocIng.Name().String(), ocIng.Watch, &health)
 	}
 
-	prog := tea.NewProgram(buildTUIModel(p, settings, c), tea.WithAltScreen())
 	_, err = prog.Run()
+	// Only safe once Run has torn down the alternate screen.
+	health.writeTo(os.Stderr)
 	return err
+}
+
+// wirePricingWarnings routes "pricing has no entry for model X" warnings into
+// the TUI status line instead of stderr, which would scribble over the
+// alternate screen. It MUST run before any collector goroutine starts:
+// pricing.Calculator reads OnWarn while costing an event, so assigning it once
+// ingestion is live is a data race. Headless commands (ingest, push) keep the
+// stderr default, which is the right channel for them.
+func wirePricingWarnings(c *core, send func(tea.Msg)) {
+	if c == nil || c.calc == nil {
+		return
+	}
+	c.calc.OnWarn = tui.PricingWarnSink(send)
 }
 
 // buildTUIModel wires the dashboard model: usage client, provider registry and

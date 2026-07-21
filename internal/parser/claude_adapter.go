@@ -20,17 +20,18 @@ func (ClaudeLineParser) ParseLine(line []byte, _ source.LineContext) ([]source.R
 	switch e := ev.(type) {
 	case AssistantEvent:
 		r := source.Record{
-			Source:      source.Claude,
-			UUID:        e.DedupUUID(),
-			SessionID:   e.Session,
-			CWD:         e.CWD,
-			Type:        "assistant",
-			Model:       e.Model,
-			TS:          e.TS,
-			In:          e.InTokens,
-			Out:         e.OutTokens,
-			CacheRead:   e.CacheReadTokens,
-			CacheCreate: e.CacheCreateTokens,
+			Source:        source.Claude,
+			UUID:          e.DedupUUID(),
+			SessionID:     e.Session,
+			CWD:           e.CWD,
+			Type:          "assistant",
+			Model:         e.Model,
+			TS:            e.TS,
+			In:            e.InTokens,
+			Out:           e.OutTokens,
+			CacheRead:     e.CacheReadTokens,
+			CacheCreate:   e.CacheCreateTokens,
+			CacheCreate1h: e.CacheCreate1hTokens,
 		}
 		return []source.Record{r}, nil
 	case UserEvent:

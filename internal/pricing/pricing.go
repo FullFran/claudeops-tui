@@ -264,8 +264,8 @@ func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64
 // CostForCacheTTL is CostFor with the 1-hour-TTL portion of the cache writes
 // split out. cacheCreate is the total number of cache-write tokens and
 // cacheCreate1h the part of it written with a 1h TTL, which Anthropic bills at
-// roughly 1.6x the 5m rate. When cacheCreate1h exceeds cacheCreate the 5m
-// remainder floors at zero.
+// roughly 1.6x the 5m rate. When cacheCreate1h exceeds cacheCreate it is capped
+// at the total, so a malformed line can never bill more tokens than it reported.
 func (c *Calculator) CostForCacheTTL(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64) *float64 {
 	if nonBillableModels[model] {
 		return nil
@@ -294,10 +294,10 @@ func (c *Calculator) CostForCacheTTL(model string, in, out, cacheRead, cacheCrea
 		c.mu.Unlock()
 		return nil
 	}
-	cacheCreate5m := cacheCreate - cacheCreate1h
-	if cacheCreate5m < 0 {
-		cacheCreate5m = 0
+	if cacheCreate1h > cacheCreate {
+		cacheCreate1h = cacheCreate
 	}
+	cacheCreate5m := cacheCreate - cacheCreate1h
 	cost := perMillion(in, mp.Input) +
 		perMillion(out, mp.Output) +
 		perMillion(cacheRead, mp.CacheRead) +

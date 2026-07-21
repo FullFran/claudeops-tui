@@ -31,7 +31,10 @@ type Event struct {
 	OutTokens         int64
 	CacheReadTokens   int64
 	CacheCreateTokens int64
-	Source            string // ingestion origin: "claude", "codex", "opencode"; defaults to "claude"
+	// CacheCreate1hTokens is the part of CacheCreateTokens written with a 1h
+	// TTL, which bills at a higher rate. 0 when the source reports no breakdown.
+	CacheCreate1hTokens int64
+	Source              string // ingestion origin: "claude", "codex", "opencode"; defaults to "claude"
 }
 
 // Open creates (or opens) the SQLite file and runs migrations.
@@ -59,7 +62,25 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schemaSQL); err != nil {
 		return err
 	}
-	return s.migrateAddSource()
+	if err := s.migrateAddSource(); err != nil {
+		return err
+	}
+	return s.migrateAddCacheCreate1h()
+}
+
+// migrateAddCacheCreate1h adds the 1-hour-TTL portion of the cache writes to
+// events if absent. Additive and idempotent like migrateAddSource: existing
+// rows keep their counts and read as 0, which is what a line without a
+// cache_creation breakdown reports anyway.
+// MUST only be called from migrate() (read-write open path).
+func (s *Store) migrateAddCacheCreate1h() error {
+	has, err := s.columnExists("events", "cache_create_1h_tokens")
+	if err != nil || has {
+		return err
+	}
+	_, err = s.db.Exec(
+		"ALTER TABLE events ADD COLUMN cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0")
+	return err
 }
 
 // migrateAddSource adds the source column to events and sessions if absent.
@@ -221,17 +242,19 @@ func (s *Store) Insert(ctx context.Context, ev Event, costEUR *float64, taskID *
 	// with its consistently-computed cost. Equal output is a no-op, which keeps
 	// re-ingestion idempotent and order-independent.
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO events (uuid, session_id, ts, type, model, in_tokens, out_tokens, cache_read_tokens, cache_create_tokens, cost_eur, task_id, source)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO events (uuid, session_id, ts, type, model, in_tokens, out_tokens, cache_read_tokens, cache_create_tokens, cache_create_1h_tokens, cost_eur, task_id, source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(uuid) DO UPDATE SET
-		     in_tokens           = excluded.in_tokens,
-		     out_tokens          = excluded.out_tokens,
-		     cache_read_tokens   = excluded.cache_read_tokens,
-		     cache_create_tokens = excluded.cache_create_tokens,
-		     cost_eur            = excluded.cost_eur
+		     in_tokens              = excluded.in_tokens,
+		     out_tokens             = excluded.out_tokens,
+		     cache_read_tokens      = excluded.cache_read_tokens,
+		     cache_create_tokens    = excluded.cache_create_tokens,
+		     cache_create_1h_tokens = excluded.cache_create_1h_tokens,
+		     cost_eur               = excluded.cost_eur
 		   WHERE excluded.out_tokens > events.out_tokens`,
 		ev.UUID, ev.SessionID, tsStr, ev.Type, nullString(ev.Model),
 		ev.InTokens, ev.OutTokens, ev.CacheReadTokens, ev.CacheCreateTokens,
+		ev.CacheCreate1hTokens,
 		nullFloat(costEUR), nullString(strDeref(taskID)), source,
 	); err != nil {
 		return err

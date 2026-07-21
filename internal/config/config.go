@@ -123,13 +123,16 @@ type ThresholdsSettings struct {
 
 // TabSettings toggles entire tabs on/off. A disabled tab is hidden from the
 // tab bar and unreachable via number keys. Dashboard cannot be disabled.
+// There is one field per tab that exists: the removed `calendar` key named a
+// tab that never shipped, and it is ignored like any other unknown key when it
+// is still present in a user's file.
 type TabSettings struct {
-	Calendar bool `toml:"calendar"`
-	Sessions bool `toml:"sessions"`
-	Projects bool `toml:"projects"`
-	Models   bool `toml:"models"`
-	Tasks    bool `toml:"tasks"`
-	Insights bool `toml:"insights"`
+	Sessions  bool `toml:"sessions"`
+	Projects  bool `toml:"projects"`
+	Models    bool `toml:"models"`
+	Tasks     bool `toml:"tasks"`
+	Insights  bool `toml:"insights"`
+	Classroom bool `toml:"classroom"`
 }
 
 // InsightsSettings toggles individual insight cards on the Insights tab.
@@ -179,12 +182,12 @@ func DefaultSettings() Settings {
 			},
 		},
 		Tabs: TabSettings{
-			Calendar: true,
-			Sessions: true,
-			Projects: true,
-			Models:   true,
-			Tasks:    true,
-			Insights: true,
+			Sessions:  true,
+			Projects:  true,
+			Models:    true,
+			Tasks:     true,
+			Insights:  true,
+			Classroom: true,
 		},
 		Insights: InsightsSettings{
 			ShowCacheEfficiency:   true,

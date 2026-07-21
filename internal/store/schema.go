@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS events (
     out_tokens            INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
     cache_create_tokens   INTEGER NOT NULL DEFAULT 0,
+    cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0,
     cost_eur              REAL,
     task_id               TEXT REFERENCES tasks(id),
     source                TEXT NOT NULL DEFAULT 'claude'
