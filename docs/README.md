@@ -1,22 +1,23 @@
 # ClaudeOps TUI — Documentation
 
-Local TUI to track Claude Code usage, costs, and tasks. Greenfield Go + Bubbletea project.
+Local TUI to track Claude Code, Codex and opencode usage, costs, and tasks.
 
 ## Index
 
-- [plan.md](./plan.md) — vision, phases, MVP scope, what's IN and OUT
-- [architecture.md](./architecture.md) — package layout, data flow, key decisions
+- [architecture.md](./architecture.md) — package map, data flow, concurrency, schema
+- [upgrading.md](./upgrading.md) — behavior changes that need action from you
+- [providers.md](./providers.md) — built-in and user-defined live quota providers
 - [jsonl-format.md](./jsonl-format.md) — observed `~/.claude/projects/*.jsonl` event shapes
 - [oauth-usage-endpoint.md](./oauth-usage-endpoint.md) — undocumented `/api/oauth/usage` reference
 - [limitations.md](./limitations.md) — known gaps, risks, fragile dependencies
+- [plan.md](./plan.md) — original vision, what shipped, what did not
 
-## Authoritative SDD artifacts
+## On specs
 
-The single source of truth for the change in flight lives in OpenSpec format under [`openspec/changes/claudeops-mvp/`](../openspec/changes/claudeops-mvp/):
+[`openspec/changes/claudeops-mvp/`](../openspec/changes/claudeops-mvp/) contains
+the original MVP change. It has not been maintained: `tasks.md` shows 0 of 59
+tasks checked against a 0.7.0 binary, nothing is archived, and no capability
+added after the MVP is specified there.
 
-- `proposal.md` — intent, scope, rollback
-- `specs/<capability>/spec.md` — Given/When/Then requirements (6 capabilities)
-- `design.md` — technical design with diagrams and DDL
-- `tasks.md` — TDD task checklist
-
-This `docs/` folder is the **human-friendly** view. If `docs/` and `openspec/` ever disagree, **OpenSpec wins**.
+**There is no authoritative current spec in this repository.** When this folder
+and `openspec/` disagree, neither wins automatically — check the code.
