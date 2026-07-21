@@ -31,14 +31,13 @@ fmt-check: ## Fail if any tracked Go file needs formatting
 vet: ## Run go vet
 	go vet ./...
 
-lint: ## Run golangci-lint (advisory — not yet enforced in CI)
+lint: ## Run golangci-lint (enforced in CI)
 	golangci-lint run
 
 fmt: ## Format all Go files
 	gofmt -w $(GO_FILES)
 
-ci: fmt-check vet build race ## Run the same checks as the ci workflow
-	-$(MAKE) lint
+ci: fmt-check vet build race lint ## Run the same checks as the ci workflow
 
 update-pricing: ## Refresh the embedded LiteLLM pricing snapshot
 	./scripts/update-pricing.sh
