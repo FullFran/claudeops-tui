@@ -140,7 +140,7 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 	}
 	c.mu.Unlock()
 
-	creds, err := LoadCredentials(c.CredsPath)
+	creds, err := c.credentials(ctx, "")
 	if errors.Is(err, ErrNoOAuth) {
 		return Snapshot{}, ErrUsageUnavailable
 	}
@@ -148,20 +148,16 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 
-	// Proactive refresh if close to expiry.
-	if creds.IsExpired(30 * time.Second) {
-		if err := c.refresh(ctx, creds); err != nil {
-			return Snapshot{}, err
-		}
-	}
-
 	snap, status, retryAfter, err := c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	if status == http.StatusUnauthorized {
-		// Retry once after refresh.
-		if err := c.refresh(ctx, creds); err != nil {
+		// Retry once with a token refreshed under the file lock; another
+		// process may already have rotated it while we were fetching.
+		stale := creds.ClaudeAiOauth.AccessToken
+		creds, err = c.credentials(ctx, stale)
+		if err != nil {
 			return Snapshot{}, err
 		}
 		snap, status, retryAfter, err = c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
@@ -195,6 +191,38 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 	c.cachedErrUntil = time.Time{}
 	c.mu.Unlock()
 	return snap, nil
+}
+
+// refreshSkew is how early we proactively refresh before the token expires.
+const refreshSkew = 30 * time.Second
+
+// credentials loads the credentials and, when needed, refreshes them — the
+// whole load→refresh→save sequence runs under an exclusive file lock so we
+// never clobber a rotation performed by Claude Code or a second claudeops.
+//
+// staleToken is the access token that just failed with a 401, or "" for the
+// ordinary path. When the token on disk already differs from staleToken,
+// another writer refreshed it for us and no network call is made.
+func (c *Client) credentials(ctx context.Context, staleToken string) (*Credentials, error) {
+	var creds *Credentials
+	err := withFileLock(c.CredsPath, func() error {
+		var err error
+		creds, err = LoadCredentials(c.CredsPath)
+		if err != nil {
+			return err
+		}
+		if staleToken != "" {
+			if creds.ClaudeAiOauth.AccessToken != staleToken {
+				return nil
+			}
+			return c.refresh(ctx, creds)
+		}
+		if creds.IsExpired(refreshSkew) {
+			return c.refresh(ctx, creds)
+		}
+		return nil
+	})
+	return creds, err
 }
 
 // fetch performs a single HTTP GET. It returns the parsed snapshot (on 200),
