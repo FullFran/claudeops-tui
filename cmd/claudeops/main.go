@@ -147,7 +147,7 @@ func cmdMCPWith(p config.Paths, serve func(*store.Store) error) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	return serve(s)
 }
 
@@ -209,7 +209,7 @@ func openCoreAt(p config.Paths) (*core, error) {
 func loadSettings(p config.Paths, errOut io.Writer) config.Settings {
 	settings, err := config.LoadOrCreate(p.ConfigPath)
 	if err != nil {
-		fmt.Fprintln(errOut, "claudeops: config:", err)
+		_, _ = fmt.Fprintln(errOut, "claudeops: config:", err)
 		return config.DefaultSettings()
 	}
 	return settings
@@ -437,7 +437,7 @@ func cmdIngestWith(ctx context.Context, p config.Paths, build unitsBuilder, out,
 	}
 	defer c.close()
 	res := runIngestUnits(ctx, build(p, c), errOut)
-	fmt.Fprintf(out, "ingested: %d   unknown: %d   parse_errors: %d\n",
+	_, _ = fmt.Fprintf(out, "ingested: %d   unknown: %d   parse_errors: %d\n",
 		res.ingested, res.unknown, res.parseErrors)
 	return res.err()
 }
@@ -466,7 +466,7 @@ func cmdReingest(args []string) error {
 func cmdReingestWith(ctx context.Context, p config.Paths, build unitsBuilder,
 	in io.Reader, out, errOut io.Writer, yes bool) error {
 	if !yes {
-		fmt.Fprint(out, "This clears the local event store and rebuilds it from source files\n"+
+		_, _ = fmt.Fprint(out, "This clears the local event store and rebuilds it from source files\n"+
 			"(tasks and config are kept). Continue? [y/N] ")
 		sc := bufio.NewScanner(in)
 		resp := ""
@@ -474,7 +474,7 @@ func cmdReingestWith(ctx context.Context, p config.Paths, build unitsBuilder,
 			resp = strings.TrimSpace(sc.Text())
 		}
 		if resp != "y" && resp != "Y" && resp != "yes" {
-			fmt.Fprintln(out, "aborted")
+			_, _ = fmt.Fprintln(out, "aborted")
 			return nil
 		}
 	}
@@ -489,7 +489,7 @@ func cmdReingestWith(ctx context.Context, p config.Paths, build unitsBuilder,
 		return fmt.Errorf("reset: %w", err)
 	}
 	res := runIngestUnits(ctx, build(p, c), errOut)
-	fmt.Fprintf(out, "reingested: %d   unknown: %d   parse_errors: %d\n",
+	_, _ = fmt.Fprintf(out, "reingested: %d   unknown: %d   parse_errors: %d\n",
 		res.ingested, res.unknown, res.parseErrors)
 	return res.err()
 }
@@ -554,7 +554,7 @@ func runIngestUnits(ctx context.Context, units []ingestUnit, errOut io.Writer) i
 	var res ingestResult
 	for _, u := range units {
 		if err := u.ingest(ctx); err != nil {
-			fmt.Fprintf(errOut, "claudeops: ingest: source %s: %v\n", u.name, err)
+			_, _ = fmt.Fprintf(errOut, "claudeops: ingest: source %s: %v\n", u.name, err)
 			res.failed = append(res.failed, u.name)
 		}
 		if u.counts == nil {
@@ -597,13 +597,13 @@ func cmdTaskWith(ctx context.Context, p config.Paths, out io.Writer, args []stri
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "started task %s (%s)\n", t.Name, t.ID)
+		_, _ = fmt.Fprintf(out, "started task %s (%s)\n", t.Name, t.ID)
 		return nil
 	case "stop":
 		if err := c.tasks.Stop(ctx); err != nil {
 			return err
 		}
-		fmt.Fprintln(out, "stopped current task")
+		_, _ = fmt.Fprintln(out, "stopped current task")
 		return nil
 	case "list":
 		ts, err := c.store.TaskAggregates(ctx)
@@ -611,7 +611,7 @@ func cmdTaskWith(ctx context.Context, p config.Paths, out io.Writer, args []stri
 			return err
 		}
 		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tNAME\tSTARTED\tENDED\tDURATION\tEVENTS\tIN\tOUT\tCACHE R\tCACHE W\t€")
+		_, _ = fmt.Fprintln(w, "ID\tNAME\tSTARTED\tENDED\tDURATION\tEVENTS\tIN\tOUT\tCACHE R\tCACHE W\t€")
 		now := time.Now().UTC()
 		for _, t := range ts {
 			ended := "—"
@@ -624,7 +624,7 @@ func cmdTaskWith(ctx context.Context, p config.Paths, out io.Writer, args []stri
 			if len(id) > 8 {
 				id = id[:8]
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.4f\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.4f\n",
 				id, t.Name, t.StartedAt.Format(time.RFC3339), ended,
 				formatDur(end.Sub(t.StartedAt)), t.Events,
 				t.InTokens, t.OutTokens, t.CacheReadTokens, t.CacheCreateTokens, t.CostEUR)
@@ -675,14 +675,14 @@ func cmdHooksWith(p config.Paths, in io.Reader, out io.Writer, args []string) er
 		if err := hooks.Install(p.ClaudeSettings, bin); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "installed claudeops hooks into %s\n", p.ClaudeSettings)
-		fmt.Fprintf(out, "binary: %s\n", bin)
+		_, _ = fmt.Fprintf(out, "installed claudeops hooks into %s\n", p.ClaudeSettings)
+		_, _ = fmt.Fprintf(out, "binary: %s\n", bin)
 		return nil
 	case "uninstall":
 		if err := hooks.Uninstall(p.ClaudeSettings); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "removed claudeops hooks from %s\n", p.ClaudeSettings)
+		_, _ = fmt.Fprintf(out, "removed claudeops hooks from %s\n", p.ClaudeSettings)
 		return nil
 	case "status":
 		bin, _ := resolveBinary()
@@ -690,14 +690,14 @@ func cmdHooksWith(p config.Paths, in io.Reader, out io.Writer, args []string) er
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "settings: %s\n", r.SettingsPath)
-		fmt.Fprintf(out, "binary:   %s (exists: %v)\n", r.Binary, r.BinaryExists)
+		_, _ = fmt.Fprintf(out, "settings: %s\n", r.SettingsPath)
+		_, _ = fmt.Fprintf(out, "binary:   %s (exists: %v)\n", r.Binary, r.BinaryExists)
 		for _, ev := range hooks.ManagedEvents {
 			mark := "✗"
 			if r.Events[ev] {
 				mark = "✓"
 			}
-			fmt.Fprintf(out, "  %s %s\n", mark, ev)
+			_, _ = fmt.Fprintf(out, "  %s %s\n", mark, ev)
 		}
 		return nil
 	case "handle":
@@ -769,7 +769,7 @@ func cmdPushWith(ctx context.Context, p config.Paths, out io.Writer, args []stri
 		return err
 	}
 	if !result.DryRun {
-		fmt.Fprintf(out, "pushed %d data points — window %s → %s\n",
+		_, _ = fmt.Fprintf(out, "pushed %d data points — window %s → %s\n",
 			result.DataPoints,
 			result.PeriodFrom.Format(time.RFC3339),
 			result.PeriodTo.Format(time.RFC3339))
@@ -805,7 +805,7 @@ func cmdOTelConfigWith(p config.Paths, out io.Writer, args []string) error {
 		if err := export.ApplyOTelConfig(settingsJSONPath, cfg.Export); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "applied OTel config to %s\n", settingsJSONPath)
+		_, _ = fmt.Fprintf(out, "applied OTel config to %s\n", settingsJSONPath)
 		return nil
 	case "status":
 		status, err := export.StatusOTelConfig(settingsJSONPath)
@@ -813,10 +813,10 @@ func cmdOTelConfigWith(p config.Paths, out io.Writer, args []string) error {
 			return err
 		}
 		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-		fmt.Fprintf(w, "applied:\t%v\n", status.Applied)
+		_, _ = fmt.Fprintf(w, "applied:\t%v\n", status.Applied)
 		for _, k := range export.ManagedOTelKeys {
 			if v, ok := status.Values[k]; ok {
-				fmt.Fprintf(w, "%s:\t%s\n", k, v)
+				_, _ = fmt.Fprintf(w, "%s:\t%s\n", k, v)
 			}
 		}
 		return w.Flush()
@@ -824,7 +824,7 @@ func cmdOTelConfigWith(p config.Paths, out io.Writer, args []string) error {
 		if err := export.RemoveOTelConfig(settingsJSONPath); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "removed OTel config from %s\n", settingsJSONPath)
+		_, _ = fmt.Fprintf(out, "removed OTel config from %s\n", settingsJSONPath)
 		return nil
 	default:
 		return fmt.Errorf("otel-config: unknown subcommand %q", args[0])
