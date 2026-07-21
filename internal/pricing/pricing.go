@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -32,8 +31,11 @@ var (
 	litellmTable map[string]ModelPrice
 )
 
-// litellmFallback lazily parses the embedded LiteLLM snapshot. Entries with no
-// real input price are skipped so genuinely-unpriced models still warn.
+// litellmFallback lazily parses the embedded LiteLLM snapshot. An entry whose
+// four classes are all zero (e.g. "codestral-latest") means LiteLLM publishes
+// no price for it, not that the model is free, so it is skipped and the event
+// keeps cost_eur = NULL with the usual unknown-model warning. Genuinely free
+// tiers are recognized by their id instead — see IsFreeModelID.
 func litellmFallback() map[string]ModelPrice {
 	litellmOnce.Do(func() {
 		litellmTable = map[string]ModelPrice{}
@@ -42,7 +44,7 @@ func litellmFallback() map[string]ModelPrice {
 			return
 		}
 		for name, v := range raw {
-			if v[0] == 0 && v[1] == 0 {
+			if v[0] == 0 && v[1] == 0 && v[2] == 0 && v[3] == 0 {
 				continue
 			}
 			litellmTable[name] = ModelPrice{Input: v[0], Output: v[1], CacheRead: v[2], CacheCreate: v[3]}
@@ -235,14 +237,17 @@ func NewCalculator(t *Table) *Calculator {
 // CostFor computes the EUR cost for an event with the given token classes.
 // Returns nil if the model is unknown (and triggers OnWarn once).
 //
-// Model IDs with a bracket suffix — e.g. "claude-fable-5[1m]", the 1M-context
-// variant Claude Code reports — fall back to the base ID's price when no
-// explicit entry exists for the suffixed form.
-//
-// Provider-qualified IDs — e.g. opencode's "openai/gpt-5" or "google/gemini-2.5-pro"
-// — fall back to the bare model name ("gpt-5", "gemini-2.5-pro") so entries can
-// be keyed uniformly regardless of which source emitted them.
+// Decorated model IDs — "claude-fable-5[1m]", "openai/gpt-5",
+// "google/antigravity-gemini-3-pro", "ollama/kimi-k2.5:cloud" — fall back to
+// the progressively less decorated forms ModelIDCandidates derives, so the
+// table can be keyed by bare model name regardless of which source emitted the
+// event. Explicitly free variants ("…-free", "…:free") cost €0 unless the
+// table carries an exact entry for them.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
+	if _, exact := c.t.Models[model]; !exact && IsFreeModelID(model) {
+		zero := 0.0
+		return &zero
+	}
 	mp, ok := lookupPrice(c.t.Models, model)
 	if !ok {
 		// Fall back to the embedded LiteLLM snapshot for models the editable
@@ -269,49 +274,16 @@ func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64
 	return &cost
 }
 
-// lookupPrice finds a model's price in `table`, trying progressively looser
-// forms of the id:
-//   - exact match
-//   - bracket suffix stripped ("claude-fable-5[1m]" → "claude-fable-5")
-//   - provider prefix stripped ("openai/gpt-5" → "gpt-5")
-//   - for Claude ids, dots normalized to dashes ("claude-opus-4.6" →
-//     "claude-opus-4-6"), which is how some sources qualify Anthropic models.
+// lookupPrice finds a model's price in `table`, trying every form
+// ModelIDCandidates derives from the id, from the exact id down to the fully
+// normalized one.
 func lookupPrice(table map[string]ModelPrice, model string) (ModelPrice, bool) {
-	for _, k := range priceCandidates(model) {
+	for _, k := range ModelIDCandidates(model) {
 		if mp, ok := table[k]; ok {
 			return mp, true
 		}
 	}
 	return ModelPrice{}, false
-}
-
-// priceCandidates returns the ordered lookup keys for a model id.
-func priceCandidates(model string) []string {
-	cands := []string{model}
-	if base, ok := stripBracket(model); ok {
-		cands = append(cands, base)
-	}
-	if i := strings.LastIndexByte(model, '/'); i >= 0 && i+1 < len(model) {
-		bare := model[i+1:]
-		cands = append(cands, bare)
-		if base, ok := stripBracket(bare); ok {
-			cands = append(cands, base)
-		}
-	}
-	// Claude ids with dot-separated versions ("claude-opus-4.6").
-	for _, c := range append([]string{}, cands...) {
-		if strings.HasPrefix(c, "claude") && strings.Contains(c, ".") {
-			cands = append(cands, strings.ReplaceAll(c, ".", "-"))
-		}
-	}
-	return cands
-}
-
-func stripBracket(s string) (string, bool) {
-	if i := strings.IndexByte(s, '['); i > 0 && strings.HasSuffix(s, "]") {
-		return s[:i], true
-	}
-	return "", false
 }
 
 // Updated returns the table's updated date for the dashboard footer.
