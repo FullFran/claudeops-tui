@@ -52,6 +52,10 @@ type Collector struct {
 
 	mu       sync.Mutex
 	watching map[string]bool // file path → true
+
+	// watchReady, when non-nil, is called once Watch has registered every
+	// directory. Tests use it to avoid racing file creation against setup.
+	watchReady func()
 }
 
 // New builds a Collector using the classic direct-store path.

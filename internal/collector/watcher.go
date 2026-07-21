@@ -23,6 +23,9 @@ func (c *Collector) Watch(ctx context.Context) error {
 	if err := addDirsRecursively(w, c.root); err != nil {
 		return err
 	}
+	if c.watchReady != nil {
+		c.watchReady()
+	}
 
 	// Throttle re-ingest of the same file.
 	tick := time.NewTicker(500 * time.Millisecond)
