@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -32,8 +31,11 @@ var (
 	litellmTable map[string]ModelPrice
 )
 
-// litellmFallback lazily parses the embedded LiteLLM snapshot. Entries with no
-// real input price are skipped so genuinely-unpriced models still warn.
+// litellmFallback lazily parses the embedded LiteLLM snapshot. An entry whose
+// four classes are all zero (e.g. "codestral-latest") means LiteLLM publishes
+// no price for it, not that the model is free, so it is skipped and the event
+// keeps cost_eur = NULL with the usual unknown-model warning. Genuinely free
+// tiers are recognized by their id instead — see IsFreeModelID.
 func litellmFallback() map[string]ModelPrice {
 	litellmOnce.Do(func() {
 		litellmTable = map[string]ModelPrice{}
@@ -42,7 +44,7 @@ func litellmFallback() map[string]ModelPrice {
 			return
 		}
 		for name, v := range raw {
-			if v[0] == 0 && v[1] == 0 {
+			if v[0] == 0 && v[1] == 0 && v[2] == 0 && v[3] == 0 {
 				continue
 			}
 			litellmTable[name] = ModelPrice{Input: v[0], Output: v[1], CacheRead: v[2], CacheCreate: v[3]}
@@ -52,11 +54,15 @@ func litellmFallback() map[string]ModelPrice {
 }
 
 // ModelPrice is the EUR cost per 1,000,000 tokens for each class.
+// CacheCreate is the 5-minute-TTL cache-write rate; CacheCreate1h is the
+// 1-hour-TTL one and is optional — when absent it derives from Input (see
+// cacheCreate1hRate).
 type ModelPrice struct {
-	Input       float64 `toml:"input"`
-	Output      float64 `toml:"output"`
-	CacheRead   float64 `toml:"cache_read"`
-	CacheCreate float64 `toml:"cache_create"`
+	Input         float64 `toml:"input"`
+	Output        float64 `toml:"output"`
+	CacheRead     float64 `toml:"cache_read"`
+	CacheCreate   float64 `toml:"cache_create"`
+	CacheCreate1h float64 `toml:"cache_create_1h"`
 }
 
 // Table is the parsed pricing.toml.
@@ -210,6 +216,9 @@ func encodeTable(t *Table) []byte {
 		fmt.Fprintf(&buf, "output        = %5.4f\n", price.Output)
 		fmt.Fprintf(&buf, "cache_read    = %5.4f\n", price.CacheRead)
 		fmt.Fprintf(&buf, "cache_create  = %5.4f\n", price.CacheCreate)
+		if price.CacheCreate1h > 0 {
+			fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", price.CacheCreate1h)
+		}
 		if i < len(models)-1 {
 			buf.WriteString("\n")
 		}
@@ -218,8 +227,15 @@ func encodeTable(t *Table) []byte {
 	return buf.Bytes()
 }
 
+// nonBillableModels are pseudo-model ids that carry no API usage — Claude Code
+// reports "<synthetic>" for locally generated messages. They cost nothing and
+// have no price entry, so they stay NULL without a missing-model warning.
+var nonBillableModels = map[string]bool{"<synthetic>": true}
+
 // Calculator is a thin wrapper that warns once per unknown model and
 // computes a per-event cost from a Table.
+// The table may be swapped at runtime via Reload, so every read of `t` goes
+// through mu.
 type Calculator struct {
 	t       *Table
 	mu      sync.Mutex
@@ -235,15 +251,31 @@ func NewCalculator(t *Table) *Calculator {
 // CostFor computes the EUR cost for an event with the given token classes.
 // Returns nil if the model is unknown (and triggers OnWarn once).
 //
-// Model IDs with a bracket suffix — e.g. "claude-fable-5[1m]", the 1M-context
-// variant Claude Code reports — fall back to the base ID's price when no
-// explicit entry exists for the suffixed form.
-//
-// Provider-qualified IDs — e.g. opencode's "openai/gpt-5" or "google/gemini-2.5-pro"
-// — fall back to the bare model name ("gpt-5", "gemini-2.5-pro") so entries can
-// be keyed uniformly regardless of which source emitted them.
+// Decorated model IDs — "claude-fable-5[1m]", "openai/gpt-5",
+// "google/antigravity-gemini-3-pro", "ollama/kimi-k2.5:cloud" — fall back to
+// the progressively less decorated forms ModelIDCandidates derives, so the
+// table can be keyed by bare model name regardless of which source emitted the
+// event. Explicitly free variants ("…-free", "…:free") cost €0 unless the
+// table carries an exact entry for them.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
-	mp, ok := lookupPrice(c.t.Models, model)
+	return c.CostForCacheTTL(model, in, out, cacheRead, cacheCreate, 0)
+}
+
+// CostForCacheTTL is CostFor with the 1-hour-TTL portion of the cache writes
+// split out. cacheCreate is the total number of cache-write tokens and
+// cacheCreate1h the part of it written with a 1h TTL, which Anthropic bills at
+// roughly 1.6x the 5m rate. When cacheCreate1h exceeds cacheCreate the 5m
+// remainder floors at zero.
+func (c *Calculator) CostForCacheTTL(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64) *float64 {
+	if nonBillableModels[model] {
+		return nil
+	}
+	models := c.table().Models
+	if _, exact := models[model]; !exact && IsFreeModelID(model) {
+		zero := 0.0
+		return &zero
+	}
+	mp, ok := lookupPrice(models, model)
 	if !ok {
 		// Fall back to the embedded LiteLLM snapshot for models the editable
 		// table doesn't carry (the user's table always wins when present).
@@ -262,22 +294,38 @@ func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64
 		c.mu.Unlock()
 		return nil
 	}
+	cacheCreate5m := cacheCreate - cacheCreate1h
+	if cacheCreate5m < 0 {
+		cacheCreate5m = 0
+	}
 	cost := perMillion(in, mp.Input) +
 		perMillion(out, mp.Output) +
 		perMillion(cacheRead, mp.CacheRead) +
-		perMillion(cacheCreate, mp.CacheCreate)
+		perMillion(cacheCreate5m, mp.CacheCreate) +
+		perMillion(cacheCreate1h, cacheCreate1hRate(mp))
 	return &cost
 }
 
-// lookupPrice finds a model's price in `table`, trying progressively looser
-// forms of the id:
-//   - exact match
-//   - bracket suffix stripped ("claude-fable-5[1m]" → "claude-fable-5")
-//   - provider prefix stripped ("openai/gpt-5" → "gpt-5")
-//   - for Claude ids, dots normalized to dashes ("claude-opus-4.6" →
-//     "claude-opus-4-6"), which is how some sources qualify Anthropic models.
+// cacheCreate1hRate returns the 1-hour-TTL cache-write rate. Anthropic prices
+// it at input x 2 (against input x 1.25 for 5m), so when the table carries no
+// explicit cache_create_1h we derive it from input, falling back to 1.6x the
+// 5m rate for tables that only price the cache classes.
+func cacheCreate1hRate(mp ModelPrice) float64 {
+	switch {
+	case mp.CacheCreate1h > 0:
+		return mp.CacheCreate1h
+	case mp.Input > 0:
+		return mp.Input * 2
+	default:
+		return mp.CacheCreate * 1.6
+	}
+}
+
+// lookupPrice finds a model's price in `table`, trying every form
+// ModelIDCandidates derives from the id, from the exact id down to the fully
+// normalized one.
 func lookupPrice(table map[string]ModelPrice, model string) (ModelPrice, bool) {
-	for _, k := range priceCandidates(model) {
+	for _, k := range ModelIDCandidates(model) {
 		if mp, ok := table[k]; ok {
 			return mp, true
 		}
@@ -285,37 +333,34 @@ func lookupPrice(table map[string]ModelPrice, model string) (ModelPrice, bool) {
 	return ModelPrice{}, false
 }
 
-// priceCandidates returns the ordered lookup keys for a model id.
-func priceCandidates(model string) []string {
-	cands := []string{model}
-	if base, ok := stripBracket(model); ok {
-		cands = append(cands, base)
-	}
-	if i := strings.LastIndexByte(model, '/'); i >= 0 && i+1 < len(model) {
-		bare := model[i+1:]
-		cands = append(cands, bare)
-		if base, ok := stripBracket(bare); ok {
-			cands = append(cands, base)
-		}
-	}
-	// Claude ids with dot-separated versions ("claude-opus-4.6").
-	for _, c := range append([]string{}, cands...) {
-		if strings.HasPrefix(c, "claude") && strings.Contains(c, ".") {
-			cands = append(cands, strings.ReplaceAll(c, ".", "-"))
-		}
-	}
-	return cands
+// Reload swaps in a freshly parsed table so price edits apply without a
+// restart. The missing-model memo is cleared, so a model that is still unpriced
+// warns once more against the new table.
+func (c *Calculator) Reload(t *Table) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+	c.missing = map[string]bool{}
 }
 
-func stripBracket(s string) (string, bool) {
-	if i := strings.IndexByte(s, '['); i > 0 && strings.HasSuffix(s, "]") {
-		return s[:i], true
+// ReloadFrom loads `path` and swaps it in. The current table is kept on error.
+func (c *Calculator) ReloadFrom(path string) error {
+	t, err := Load(path)
+	if err != nil {
+		return err
 	}
-	return "", false
+	c.Reload(t)
+	return nil
+}
+
+func (c *Calculator) table() *Table {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
 }
 
 // Updated returns the table's updated date for the dashboard footer.
-func (c *Calculator) Updated() string { return c.t.Updated }
+func (c *Calculator) Updated() string { return c.table().Updated }
 
 func perMillion(tokens int64, pricePerMillion float64) float64 {
 	return float64(tokens) * pricePerMillion / 1_000_000.0
