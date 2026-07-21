@@ -25,7 +25,8 @@ race: ## Run all tests with the race detector
 	go test -race ./...
 
 fmt-check: ## Fail if any tracked Go file needs formatting
-	@gofmt -l $(GO_FILES) | (grep . && echo "gofmt needed (run 'make fmt')" && exit 1) || true
+	@bad=$$(gofmt -l $(GO_FILES)); \
+	if [ -n "$$bad" ]; then echo "$$bad"; echo "gofmt needed (run 'make fmt')"; exit 1; fi
 
 vet: ## Run go vet
 	go vet ./...
