@@ -1,15 +1,20 @@
-// Command claudeops is the entrypoint. With no subcommand it launches the
-// TUI dashboard. Subcommands are: task start|stop|list, ingest, update, version.
+// Command claudeops is the entrypoint. With no subcommand it launches the TUI
+// dashboard. Subcommands are: task start|stop|list, ingest, reingest, update,
+// hooks install|uninstall|status|handle, push, otel-config apply|status|remove,
+// mcp and version.
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -104,6 +109,7 @@ Usage:
   claudeops hooks install                       register Claude Code hooks for live status
   claudeops hooks uninstall                     remove claudeops hooks from settings.json
   claudeops hooks status                        show which hooks are registered
+  claudeops hooks handle                        handle a Claude Code hook event on stdin (invoked by Claude Code)
   claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
   claudeops otel-config apply                   configure Claude Code OTel telemetry
   claudeops otel-config status                  show OTel telemetry configuration
@@ -124,44 +130,104 @@ func cmdMCP() error {
 	if err != nil {
 		return err
 	}
+	return cmdMCPWith(p, func(s *store.Store) error {
+		return mcpserver.New(s).Serve()
+	})
+}
+
+// cmdMCPWith opens the store read-only and hands it to serve. The data dir and
+// the database file are provisioned first: read-only mode cannot create the
+// file, so registering the MCP server before ever launching the TUI would
+// otherwise fail with "unable to open database file".
+func cmdMCPWith(p config.Paths, serve func(*store.Store) error) error {
+	if err := ensureStore(p); err != nil {
+		return err
+	}
 	s, err := store.OpenReadOnly(p.DBPath)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	srv := mcpserver.New(s)
-	return srv.Serve()
+	return serve(s)
 }
 
-func openCore() (config.Paths, *store.Store, *pricing.Calculator, *tasks.Tracker, error) {
-	p, err := config.Default()
-	if err != nil {
-		return p, nil, nil, nil, err
-	}
+// ensureStore creates the data dir and a migrated (possibly empty) database.
+func ensureStore(p config.Paths) error {
 	if err := p.EnsureDataDir(); err != nil {
-		return p, nil, nil, nil, err
+		return err
 	}
 	s, err := store.Open(p.DBPath)
 	if err != nil {
-		return p, nil, nil, nil, err
+		return err
+	}
+	return s.Close()
+}
+
+// core bundles the dependencies every store-backed command needs.
+type core struct {
+	store *store.Store
+	calc  *pricing.Calculator
+	tasks *tasks.Tracker
+}
+
+func (c *core) close() {
+	if c != nil && c.store != nil {
+		_ = c.store.Close()
+	}
+}
+
+func openCore() (config.Paths, *core, error) {
+	p, err := config.Default()
+	if err != nil {
+		return p, nil, err
+	}
+	c, err := openCoreAt(p)
+	return p, c, err
+}
+
+// openCoreAt is the testable core opener: everything it touches lives under p.
+func openCoreAt(p config.Paths) (*core, error) {
+	if err := p.EnsureDataDir(); err != nil {
+		return nil, err
+	}
+	s, err := store.Open(p.DBPath)
+	if err != nil {
+		return nil, err
 	}
 	tbl, err := pricing.LoadOrSeed(p.PricingPath)
 	if err != nil {
 		_ = s.Close()
-		return p, nil, nil, nil, err
+		return nil, err
 	}
-	calc := pricing.NewCalculator(tbl)
 	tr := tasks.New(p.CurrentTaskPath, s)
 	_ = tr.Load()
-	return p, s, calc, tr, nil
+	return &core{store: s, calc: pricing.NewCalculator(tbl), tasks: tr}, nil
+}
+
+// loadSettings reads config.toml, falling back to defaults so a broken config
+// never stops a command from running.
+func loadSettings(p config.Paths, errOut io.Writer) config.Settings {
+	settings, err := config.LoadOrCreate(p.ConfigPath)
+	if err != nil {
+		fmt.Fprintln(errOut, "claudeops: config:", err)
+		return config.DefaultSettings()
+	}
+	return settings
+}
+
+// namedCollector pairs a Collector with the source name that produced it, so
+// failures and counters can be reported per source.
+type namedCollector struct {
+	name string
+	col  *collector.Collector
 }
 
 // buildCollectors creates one Collector per enabled line-based source from the
 // given config. claudeRoot is the fallback root for the claude source when
 // SourceConfig.Root is empty. The opencode DB-poller source is handled separately
 // by buildOpencodeIngester — it does NOT go through the Collector machinery.
-func buildCollectors(sources []config.SourceConfig, sk source.Sink, claudeRoot string) []*collector.Collector {
-	var cols []*collector.Collector
+func buildCollectors(sources []config.SourceConfig, sk source.Sink, claudeRoot string) []namedCollector {
+	var cols []namedCollector
 	for _, sc := range sources {
 		if !sc.Enabled {
 			continue
@@ -173,13 +239,13 @@ func buildCollectors(sources []config.SourceConfig, sk source.Sink, claudeRoot s
 				root = claudeRoot
 			}
 			lp := parser.ClaudeLineParser{}
-			cols = append(cols, collector.NewWithSource(source.Claude, root, sk, lp, nil))
+			cols = append(cols, namedCollector{sc.Name, collector.NewWithSource(source.Claude, root, sk, lp, nil)})
 		case "codex":
 			if root == "" {
 				root = codex.CodexRoot()
 			}
 			lp := codex.NewParser()
-			cols = append(cols, collector.NewWithSource(source.Codex, root, sk, lp, nil))
+			cols = append(cols, namedCollector{sc.Name, collector.NewWithSource(source.Codex, root, sk, lp, nil)})
 		case "opencode":
 			// opencode is a DB-poller, not a Collector. Handled by buildOpencodeIngester.
 		default:
@@ -261,44 +327,30 @@ func buildOpencodeIngester(sources []config.SourceConfig, s *store.Store, sk sou
 }
 
 func cmdTUI() error {
-	p, s, calc, tr, err := openCore()
+	p, c, err := openCore()
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer c.close()
 
-	settings, err := config.LoadOrCreate(p.ConfigPath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "claudeops: config:", err)
-		// Fall back to defaults rather than refuse to start.
-		settings = config.DefaultSettings()
-	}
-
-	uClient := usage.New(p.ClaudeCreds)
-	if settings.Usage.CacheTTLSeconds > 0 {
-		uClient.CacheTTL = time.Duration(settings.Usage.CacheTTLSeconds) * time.Second
-	}
+	settings := loadSettings(p, os.Stderr)
 
 	// Build multi-collector using source seam. Auto-detects codex/opencode
 	// when present (unless the user configured sources explicitly).
-	sink := source.NewStoreSinkWithTasks(s, calc, tr)
+	sink := source.NewStoreSinkWithTasks(c.store, c.calc, c.tasks)
 	srcs := resolveSources(settings)
-	cols := buildCollectors(srcs, sink, p.ClaudeProjects)
-	// Fallback to legacy collector if no source-seam collectors were built.
-	if len(cols) == 0 {
-		cols = append(cols, collector.New(p.ClaudeProjects, s, calc, tr))
-	}
+	cols := collectorsFor(srcs, sink, p, c)
 
 	// opencode DB-poller: independent of the Collector loop.
-	ocIng := buildOpencodeIngester(srcs, s, sink)
+	ocIng := buildOpencodeIngester(srcs, c.store, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	for _, col := range cols {
-		col := col // capture
+	for _, nc := range cols {
+		nc := nc // capture
 		go func() {
 			// Best-effort: cold ingest, then watch.
-			_ = col.Watch(ctx)
+			_ = nc.col.Watch(ctx)
 		}()
 	}
 	if ocIng != nil {
@@ -307,7 +359,19 @@ func cmdTUI() error {
 		}()
 	}
 
-	model := tui.NewWithSettings(s, uClient, tr, settings, calc.Updated(), version)
+	prog := tea.NewProgram(buildTUIModel(p, settings, c), tea.WithAltScreen())
+	_, err = prog.Run()
+	return err
+}
+
+// buildTUIModel wires the dashboard model: usage client, provider registry and
+// the paths the TUI needs to read config and live session sidecars.
+func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model {
+	uClient := usage.New(p.ClaudeCreds)
+	if settings.Usage.CacheTTLSeconds > 0 {
+		uClient.CacheTTL = time.Duration(settings.Usage.CacheTTLSeconds) * time.Second
+	}
+	model := tui.NewWithSettings(c.store, uClient, c.tasks, settings, c.calc.Updated(), version)
 	model.ConfigPath = p.ConfigPath
 	model.ProjectsRoot = p.ClaudeProjects
 	model.LiveDir = p.LiveDir
@@ -325,22 +389,39 @@ func cmdTUI() error {
 			model.Providers.Register(g)
 		}
 	}
-	prog := tea.NewProgram(model, tea.WithAltScreen())
-	_, err = prog.Run()
-	return err
+	return model
+}
+
+// collectorsFor builds the enabled line-based collectors, falling back to the
+// legacy claude-only collector when no source produced one.
+func collectorsFor(srcs []config.SourceConfig, sink source.Sink, p config.Paths, c *core) []namedCollector {
+	cols := buildCollectors(srcs, sink, p.ClaudeProjects)
+	if len(cols) == 0 {
+		cols = append(cols, namedCollector{"claude", collector.New(p.ClaudeProjects, c.store, c.calc, c.tasks)})
+	}
+	return cols
 }
 
 func cmdIngest() error {
-	p, s, calc, tr, err := openCore()
+	p, err := config.Default()
 	if err != nil {
 		return err
 	}
-	defer s.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	ing, unk, perr := ingestAllSources(ctx, p, s, calc, tr)
-	fmt.Printf("ingested: %d   unknown: %d   parse_errors: %d\n", ing, unk, perr)
-	return nil
+	return cmdIngestWith(ctx, p, buildIngestUnits, os.Stdout, os.Stderr)
+}
+
+func cmdIngestWith(ctx context.Context, p config.Paths, build unitsBuilder, out, errOut io.Writer) error {
+	c, err := openCoreAt(p)
+	if err != nil {
+		return err
+	}
+	defer c.close()
+	res := runIngestUnits(ctx, build(p, c), errOut)
+	fmt.Fprintf(out, "ingested: %d   unknown: %d   parse_errors: %d\n",
+		res.ingested, res.unknown, res.parseErrors)
+	return res.err()
 }
 
 // cmdReingest clears the derived event store and rebuilds it from the source
@@ -355,110 +436,180 @@ func cmdReingest(args []string) error {
 		return err
 	}
 
-	p, s, calc, tr, err := openCore()
+	p, err := config.Default()
 	if err != nil {
 		return err
 	}
-	defer s.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	return cmdReingestWith(ctx, p, buildIngestUnits, os.Stdin, os.Stdout, os.Stderr, *yes)
+}
 
-	if !*yes {
-		fmt.Print("This clears the local event store and rebuilds it from source files\n" +
+func cmdReingestWith(ctx context.Context, p config.Paths, build unitsBuilder,
+	in io.Reader, out, errOut io.Writer, yes bool) error {
+	if !yes {
+		fmt.Fprint(out, "This clears the local event store and rebuilds it from source files\n"+
 			"(tasks and config are kept). Continue? [y/N] ")
-		var resp string
-		_, _ = fmt.Scanln(&resp)
+		sc := bufio.NewScanner(in)
+		resp := ""
+		if sc.Scan() {
+			resp = strings.TrimSpace(sc.Text())
+		}
 		if resp != "y" && resp != "Y" && resp != "yes" {
-			fmt.Println("aborted")
+			fmt.Fprintln(out, "aborted")
 			return nil
 		}
 	}
 
-	if err := s.ResetIngestedData(ctx); err != nil {
-		return fmt.Errorf("reset: %w", err)
-	}
-	ing, unk, perr := ingestAllSources(ctx, p, s, calc, tr)
-	fmt.Printf("reingested: %d   unknown: %d   parse_errors: %d\n", ing, unk, perr)
-	return nil
-}
-
-// ingestAllSources runs a one-shot cold ingest of every enabled source
-// (claude + codex collectors, plus the opencode DB poller) and returns the
-// aggregate ingested / unknown / parse-error counts. It mirrors the cold-ingest
-// pass cmdTUI runs on startup, so CLI ingest and the TUI agree on coverage.
-func ingestAllSources(ctx context.Context, p config.Paths, s *store.Store, calc *pricing.Calculator, tr *tasks.Tracker) (ingested, unknown, parseErrors int64) {
-	sink := source.NewStoreSinkWithTasks(s, calc, tr)
-	srcs := resolveSources(config.DefaultSettings())
-	if settings, err := config.LoadOrCreate(p.ConfigPath); err == nil {
-		srcs = resolveSources(settings)
-	}
-	cols := buildCollectors(srcs, sink, p.ClaudeProjects)
-	if len(cols) == 0 {
-		cols = append(cols, collector.New(p.ClaudeProjects, s, calc, tr))
-	}
-	for _, col := range cols {
-		if err := col.IngestExisting(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "claudeops: ingest: %v\n", err)
-		}
-		ingested += col.IngestedCount()
-		unknown += col.UnknownCount()
-		parseErrors += col.ParseErrorCount()
-	}
-	if ocIng := buildOpencodeIngester(srcs, s, sink); ocIng != nil {
-		if err := ocIng.IngestExisting(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "claudeops: opencode ingest: %v\n", err)
-		}
-	}
-	return ingested, unknown, parseErrors
-}
-
-func cmdTask(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("task: missing subcommand (start|stop|list)")
-	}
-	_, s, _, tr, err := openCore()
+	c, err := openCoreAt(p)
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer c.close()
+
+	if err := c.store.ResetIngestedData(ctx); err != nil {
+		return fmt.Errorf("reset: %w", err)
+	}
+	res := runIngestUnits(ctx, build(p, c), errOut)
+	fmt.Fprintf(out, "reingested: %d   unknown: %d   parse_errors: %d\n",
+		res.ingested, res.unknown, res.parseErrors)
+	return res.err()
+}
+
+// ingestUnit is one named cold-ingest step: a source to drain plus accessors
+// for the counters it accumulated.
+type ingestUnit struct {
+	name   string
+	ingest func(context.Context) error
+	counts func() (ingested, unknown, parseErrors int64)
+}
+
+// unitsBuilder produces the cold-ingest steps for the enabled sources.
+type unitsBuilder func(config.Paths, *core) []ingestUnit
+
+// ingestResult aggregates the counters of a one-shot ingest plus the names of
+// the sources that failed.
+type ingestResult struct {
+	ingested    int64
+	unknown     int64
+	parseErrors int64
+	failed      []string
+}
+
+// err reports a non-nil error when any source failed, so ingest and reingest
+// exit non-zero and cron jobs can detect the breakage.
+func (r ingestResult) err() error {
+	if len(r.failed) == 0 {
+		return nil
+	}
+	return fmt.Errorf("ingest failed for %d of the configured sources: %s",
+		len(r.failed), strings.Join(r.failed, ", "))
+}
+
+// buildIngestUnits assembles a one-shot cold ingest of every enabled source
+// (claude + codex collectors, plus the opencode DB poller). It mirrors the
+// cold-ingest pass cmdTUI runs on startup, so CLI ingest and the TUI agree on
+// coverage.
+func buildIngestUnits(p config.Paths, c *core) []ingestUnit {
+	sink := source.NewStoreSinkWithTasks(c.store, c.calc, c.tasks)
+	srcs := resolveSources(loadSettings(p, io.Discard))
+	var units []ingestUnit
+	for _, nc := range collectorsFor(srcs, sink, p, c) {
+		col := nc.col
+		units = append(units, ingestUnit{
+			name:   nc.name,
+			ingest: col.IngestExisting,
+			counts: func() (int64, int64, int64) {
+				return col.IngestedCount(), col.UnknownCount(), col.ParseErrorCount()
+			},
+		})
+	}
+	if ocIng := buildOpencodeIngester(srcs, c.store, sink); ocIng != nil {
+		units = append(units, ingestUnit{name: "opencode", ingest: ocIng.IngestExisting})
+	}
+	return units
+}
+
+// runIngestUnits drains every unit, keeps going past a failing source, and
+// reports which ones failed.
+func runIngestUnits(ctx context.Context, units []ingestUnit, errOut io.Writer) ingestResult {
+	var res ingestResult
+	for _, u := range units {
+		if err := u.ingest(ctx); err != nil {
+			fmt.Fprintf(errOut, "claudeops: ingest: source %s: %v\n", u.name, err)
+			res.failed = append(res.failed, u.name)
+		}
+		if u.counts == nil {
+			continue
+		}
+		ing, unk, perr := u.counts()
+		res.ingested += ing
+		res.unknown += unk
+		res.parseErrors += perr
+	}
+	return res
+}
+
+func cmdTask(args []string) error {
+	p, err := config.Default()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	return cmdTaskWith(ctx, p, os.Stdout, args)
+}
+
+func cmdTaskWith(ctx context.Context, p config.Paths, out io.Writer, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task: missing subcommand (start|stop|list)")
+	}
+	if args[0] == "start" && len(args) < 2 {
+		return fmt.Errorf("task start: missing name")
+	}
+	c, err := openCoreAt(p)
+	if err != nil {
+		return err
+	}
+	defer c.close()
 
 	switch args[0] {
 	case "start":
-		if len(args) < 2 {
-			return fmt.Errorf("task start: missing name")
-		}
-		t, err := tr.Start(ctx, args[1])
+		t, err := c.tasks.Start(ctx, args[1])
 		if err != nil {
 			return err
 		}
-		fmt.Printf("started task %s (%s)\n", t.Name, t.ID)
+		fmt.Fprintf(out, "started task %s (%s)\n", t.Name, t.ID)
 		return nil
 	case "stop":
-		if err := tr.Stop(ctx); err != nil {
+		if err := c.tasks.Stop(ctx); err != nil {
 			return err
 		}
-		fmt.Println("stopped current task")
+		fmt.Fprintln(out, "stopped current task")
 		return nil
 	case "list":
-		ts, err := s.TaskAggregates(ctx)
+		ts, err := c.store.TaskAggregates(ctx)
 		if err != nil {
 			return err
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tNAME\tSTARTED\tENDED\tEVENTS\t€")
+		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "ID\tNAME\tSTARTED\tENDED\tDURATION\tEVENTS\tIN\tOUT\tCACHE R\tCACHE W\t€")
+		now := time.Now().UTC()
 		for _, t := range ts {
 			ended := "—"
+			end := now
 			if t.EndedAt != nil {
 				ended = t.EndedAt.Format(time.RFC3339)
+				end = *t.EndedAt
 			}
 			id := t.ID
 			if len(id) > 8 {
 				id = id[:8]
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%.4f\n",
-				id, t.Name, t.StartedAt.Format(time.RFC3339), ended, t.Events, t.CostEUR)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.4f\n",
+				id, t.Name, t.StartedAt.Format(time.RFC3339), ended,
+				formatDur(end.Sub(t.StartedAt)), t.Events,
+				t.InTokens, t.OutTokens, t.CacheReadTokens, t.CacheCreateTokens, t.CostEUR)
 		}
 		return w.Flush()
 	default:
@@ -466,13 +617,36 @@ func cmdTask(args []string) error {
 	}
 }
 
-func cmdHooks(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("hooks: missing subcommand (install|uninstall|status|handle)")
+// formatDur renders a task duration compactly ("2d 2h", "3h 20m", "45m")
+// instead of Go's default "119h59m0s".
+func formatDur(d time.Duration) string {
+	if d <= 0 {
+		return "0m"
 	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	mins := int(d.Minutes()) % 60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
+}
+
+func cmdHooks(args []string) error {
 	p, err := config.Default()
 	if err != nil {
 		return err
+	}
+	return cmdHooksWith(p, os.Stdin, os.Stdout, args)
+}
+
+func cmdHooksWith(p config.Paths, in io.Reader, out io.Writer, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("hooks: missing subcommand (install|uninstall|status|handle)")
 	}
 	switch args[0] {
 	case "install":
@@ -483,14 +657,14 @@ func cmdHooks(args []string) error {
 		if err := hooks.Install(p.ClaudeSettings, bin); err != nil {
 			return err
 		}
-		fmt.Printf("installed claudeops hooks into %s\n", p.ClaudeSettings)
-		fmt.Printf("binary: %s\n", bin)
+		fmt.Fprintf(out, "installed claudeops hooks into %s\n", p.ClaudeSettings)
+		fmt.Fprintf(out, "binary: %s\n", bin)
 		return nil
 	case "uninstall":
 		if err := hooks.Uninstall(p.ClaudeSettings); err != nil {
 			return err
 		}
-		fmt.Printf("removed claudeops hooks from %s\n", p.ClaudeSettings)
+		fmt.Fprintf(out, "removed claudeops hooks from %s\n", p.ClaudeSettings)
 		return nil
 	case "status":
 		bin, _ := resolveBinary()
@@ -498,20 +672,20 @@ func cmdHooks(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("settings: %s\n", r.SettingsPath)
-		fmt.Printf("binary:   %s (exists: %v)\n", r.Binary, r.BinaryExists)
+		fmt.Fprintf(out, "settings: %s\n", r.SettingsPath)
+		fmt.Fprintf(out, "binary:   %s (exists: %v)\n", r.Binary, r.BinaryExists)
 		for _, ev := range hooks.ManagedEvents {
 			mark := "✗"
 			if r.Events[ev] {
 				mark = "✓"
 			}
-			fmt.Printf("  %s %s\n", mark, ev)
+			fmt.Fprintf(out, "  %s %s\n", mark, ev)
 		}
 		return nil
 	case "handle":
 		// Invoked by Claude Code itself. Stay silent on success, log to stderr
 		// on failure, always exit 0 so we never block the user's session.
-		if err := hooks.Handle(os.Stdin, p.LiveDir); err != nil {
+		if err := hooks.Handle(in, p.LiveDir); err != nil {
 			fmt.Fprintln(os.Stderr, "claudeops: hook handle:", err)
 		}
 		return nil
@@ -533,7 +707,16 @@ func resolveBinary() (string, error) {
 }
 
 func cmdPush(args []string) error {
+	p, err := config.Default()
+	if err != nil {
+		return err
+	}
+	return cmdPushWith(context.Background(), p, os.Stdout, args)
+}
+
+func cmdPushWith(ctx context.Context, p config.Paths, out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	dryRun := fs.Bool("dry-run", false, "build payload and print to stdout, do not send")
 	since := fs.String("since", "", "override window start (RFC3339)")
 	if err := fs.Parse(args); err != nil {
@@ -549,28 +732,26 @@ func cmdPush(args []string) error {
 		sinceTime = &t
 	}
 
-	p, s, _, _, err := openCore()
+	c, err := openCoreAt(p)
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer c.close()
 
 	settings, err := config.Load(p.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("push: load config: %w", err)
 	}
 
-	credsPath := filepath.Join(os.Getenv("HOME"), ".claude", ".credentials.json")
-	pusher := export.New(s, settings.Export, export.NewFileCredReader(credsPath),
-		&http.Client{Timeout: 30 * time.Second}, os.Stdout)
+	pusher := export.New(c.store, settings.Export, export.NewFileCredReader(p.ClaudeCreds),
+		&http.Client{Timeout: 30 * time.Second}, out)
 
-	ctx := context.Background()
 	result, err := pusher.Push(ctx, export.PushOptions{DryRun: *dryRun, Since: sinceTime})
 	if err != nil {
 		return err
 	}
 	if !result.DryRun {
-		fmt.Fprintf(os.Stdout, "pushed %d data points — window %s → %s\n",
+		fmt.Fprintf(out, "pushed %d data points — window %s → %s\n",
 			result.DataPoints,
 			result.PeriodFrom.Format(time.RFC3339),
 			result.PeriodTo.Format(time.RFC3339))
@@ -579,20 +760,24 @@ func cmdPush(args []string) error {
 }
 
 func cmdOTelConfig(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: claudeops otel-config apply|status|remove")
-	}
-
 	p, err := config.Default()
 	if err != nil {
 		return err
 	}
+	return cmdOTelConfigWith(p, os.Stdout, args)
+}
+
+func cmdOTelConfigWith(p config.Paths, out io.Writer, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: claudeops otel-config apply|status|remove")
+	}
+
 	cfg, err := config.Load(p.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("otel-config: load config: %w", err)
 	}
 
-	settingsJSONPath := filepath.Join(os.Getenv("HOME"), ".claude", "settings.json")
+	settingsJSONPath := p.ClaudeSettings
 
 	switch args[0] {
 	case "apply":
@@ -602,14 +787,14 @@ func cmdOTelConfig(args []string) error {
 		if err := export.ApplyOTelConfig(settingsJSONPath, cfg.Export); err != nil {
 			return err
 		}
-		fmt.Printf("applied OTel config to %s\n", settingsJSONPath)
+		fmt.Fprintf(out, "applied OTel config to %s\n", settingsJSONPath)
 		return nil
 	case "status":
 		status, err := export.StatusOTelConfig(settingsJSONPath)
 		if err != nil {
 			return err
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "applied:\t%v\n", status.Applied)
 		for _, k := range export.ManagedOTelKeys {
 			if v, ok := status.Values[k]; ok {
@@ -621,7 +806,7 @@ func cmdOTelConfig(args []string) error {
 		if err := export.RemoveOTelConfig(settingsJSONPath); err != nil {
 			return err
 		}
-		fmt.Printf("removed OTel config from %s\n", settingsJSONPath)
+		fmt.Fprintf(out, "removed OTel config from %s\n", settingsJSONPath)
 		return nil
 	default:
 		return fmt.Errorf("otel-config: unknown subcommand %q", args[0])
