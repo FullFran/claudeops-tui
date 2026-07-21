@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,7 +22,9 @@ import (
 func makeFixtureDB(t *testing.T, dir string) *sql.DB {
 	t.Helper()
 	path := filepath.Join(dir, "opencode.db")
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	// synchronous(off) keeps the fixture writes off the fsync path; the DB is
+	// discarded with the temp dir, so durability is irrelevant here.
+	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(off)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatalf("makeFixtureDB Open: %v", err)
@@ -471,10 +474,11 @@ func TestIngesterMissingDB(t *testing.T) {
 }
 
 // TestIngesterRealDB is an integration test that reads from the real
-// ~/.local/share/opencode/opencode.db. It is skipped under -short.
+// ~/.local/share/opencode/opencode.db. It is opt-in via CLAUDEOPS_INTEGRATION=1
+// so `go test ./...` — the command CI runs — stays hermetic.
 func TestIngesterRealDB(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real DB integration test in -short mode")
+	if os.Getenv("CLAUDEOPS_INTEGRATION") != "1" {
+		t.Skip("skipping real DB integration test; set CLAUDEOPS_INTEGRATION=1 to run")
 	}
 	home, err := homeDir()
 	if err != nil {
@@ -489,7 +493,9 @@ func TestIngesterRealDB(t *testing.T) {
 	sink := &fakeSink{}
 	ing := NewIngester(dbPath, wm, sink)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Generous deadline: a multi-GB DB takes a while, and a truncated scan now
+	// fails loudly instead of passing with zero records.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := ing.IngestExisting(ctx); err != nil {
 		t.Fatalf("IngestExisting on real DB: %v", err)
