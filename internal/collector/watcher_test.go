@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,5 +189,57 @@ func TestIsDir(t *testing.T) {
 				t.Errorf("isDir(%s): want %v got %v", tc.path, tc.want, got)
 			}
 		})
+	}
+}
+
+// TestWatchIsRaceFreeWhileCountersArePolled reproduces the only concurrent
+// access the Collector actually sees in production: cmd/claudeops runs Watch on
+// one goroutine while superviseEmitErrors polls the diagnostic counters from
+// another. Every field Watch mutates is either an atomic counter or confined to
+// the Watch goroutine, so this must be clean under -race. It is the regression
+// guard for the removal of the unused `mu`/`watching` pair: if shared mutable
+// state is ever added to the Collector without synchronization, this fails.
+func TestWatchIsRaceFreeWhileCountersArePolled(t *testing.T) {
+	c, s, root := newTestCollector(t)
+	mkProjectDir(t, root, "-tmp-race")
+	startWatch(t, c)
+
+	pollDone := make(chan struct{})
+	stopPolling := make(chan struct{})
+	go func() {
+		defer close(pollDone)
+		for {
+			select {
+			case <-stopPolling:
+				return
+			default:
+			}
+			// Mirrors the health supervisor's read set.
+			_ = c.IngestedCount()
+			_ = c.EmitErrorCount()
+			_ = c.ParseErrorCount()
+			_ = c.UnknownCount()
+			_ = c.FileErrorCount()
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// Each file carries a distinct uuid; identical events would be collapsed
+	// by the store's uuid dedup and never exercise sustained ingestion.
+	const n = 20
+	for i := 0; i < n; i++ {
+		line := fmt.Sprintf(
+			`{"type":"assistant","uuid":"race-%d","sessionId":"s1","cwd":"/p",`+
+				`"timestamp":"2026-04-08T13:10:57.123Z","message":{"role":"assistant",`+
+				`"model":"claude-opus-4-6","usage":{"input_tokens":5,"output_tokens":7}}}`+"\n", i)
+		writeJSONL(t, root, "-tmp-race", fmt.Sprintf("s%d.jsonl", i), line)
+	}
+
+	got := waitFor(t, func() bool { return countEvents(t, s) == n })
+	close(stopPolling)
+	<-pollDone
+
+	if !got {
+		t.Fatalf("events never ingested while counters were polled: got %d rows", countEvents(t, s))
 	}
 }

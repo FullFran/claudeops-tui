@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,9 +52,6 @@ type Collector struct {
 	emitErrors  atomic.Int64
 	fileErrors  atomic.Int64
 
-	mu       sync.Mutex
-	watching map[string]bool // file path → true
-
 	// watchReady, when non-nil, is called once Watch has registered every
 	// directory. Tests use it to avoid racing file creation against setup.
 	watchReady func()
@@ -69,11 +65,10 @@ func New(root string, s *store.Store, calc *pricing.Calculator, tr TaskResolver)
 		tr = nopResolver{}
 	}
 	return &Collector{
-		root:     root,
-		store:    s,
-		calc:     calc,
-		tasks:    tr,
-		watching: map[string]bool{},
+		root:  root,
+		store: s,
+		calc:  calc,
+		tasks: tr,
 	}
 }
 
@@ -91,7 +86,6 @@ func NewWithSource(name source.Name, root string, sk source.Sink, lp source.Line
 		sink:       sk,
 		lineParser: lp,
 		tasks:      tr,
-		watching:   map[string]bool{},
 	}
 }
 
