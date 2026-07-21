@@ -69,7 +69,10 @@ func (s *Store) ModelsForSession(ctx context.Context, sessionID string) ([]Model
 		}
 		out = append(out, ma)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return mergeModelAggs(out), nil
 }
 
 // HourlyForSession returns per-hour aggregates for a specific session.

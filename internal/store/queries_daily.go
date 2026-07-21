@@ -86,7 +86,10 @@ func (s *Store) ModelsForDay(ctx context.Context, day time.Time) ([]ModelAgg, er
 		}
 		out = append(out, ma)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return mergeModelAggs(out), nil
 }
 
 // HourlyForDay returns per-hour aggregates for a specific local-time day.
