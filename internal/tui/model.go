@@ -789,6 +789,12 @@ func (m *Model) moveSettingsCursor(delta int) {
 
 // updateDrillDown handles keys when in day browse or day detail mode.
 func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The footer advertises `? help` in every drill-down, so honour it here
+	// too — the top-level handler never sees these keys.
+	if msg.String() == "?" {
+		m.showHelp = true
+		return m, nil
+	}
 	switch m.viewMode {
 	case viewDayBrowse:
 		switch msg.String() {

@@ -106,7 +106,7 @@ func renderHelp(m Model) string {
 		{"tab / shift+tab", "cycle tabs forward / back"},
 		{"← → h l", "cycle tabs"},
 		{"↑ ↓ j k", "scroll content / navigate lists"},
-		{"q / ctrl+c", "quit"},
+		{"q / ctrl+c", "quit (q goes back inside drill-downs)"},
 	} {
 		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
 	}
@@ -122,7 +122,7 @@ func renderHelp(m Model) string {
 
 	sb.WriteString("\n" + dimStyle.Render("  Daily breakdown") + "\n")
 	for _, r := range [][2]string{
-		{"j / k", "select day (newer / older)"},
+		{"j / k", "select day (older / newer)"},
 		{"enter", "drill into day detail"},
 		{"esc", "go back"},
 	} {
