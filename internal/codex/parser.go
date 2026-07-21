@@ -15,6 +15,7 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -58,16 +59,35 @@ type tokenCountPayload struct {
 // The Codex format requires this because model identity and cumulative token
 // totals are carried in separate lines from the token_count events.
 type sessionState struct {
-	activeModel string
-	activeCWD   string
-	prevCumIn   int64
-	prevCumOut  int64
+	activeModel   string
+	activeCWD     string
+	prevCumIn     int64
+	prevCumOut    int64
+	prevCumCached int64
+	prevCumReason int64
+	cumSeen       bool  // a total_token_usage baseline has been recorded
+	seen          bool  // at least one line of this session has been parsed
+	firstOffset   int64 // byte offset of the first line parsed for this session
+}
+
+// setCumBaseline records the running session totals so the next total-only line
+// deltas against them.
+func (s *sessionState) setCumBaseline(t *tokenInfo) {
+	s.prevCumIn = t.InputTokens
+	s.prevCumOut = t.OutputTokens
+	s.prevCumCached = t.CachedInputTokens
+	s.prevCumReason = t.ReasoningOutputTokens
+	s.cumSeen = true
 }
 
 // Parser implements source.LineParser for Codex CLI rollout JSONL files.
 // One Parser instance may be shared across multiple files for the same source;
 // state is keyed by sessionUUID so concurrent file processing is safe.
 type Parser struct {
+	// OnWarn, when set, receives one message per unknown rollout line type.
+	// Callers use it to surface schema drift; the default is to record it only.
+	OnWarn func(msg string)
+
 	mu       sync.Mutex
 	sessions map[string]*sessionState
 	warnOnce map[string]bool
@@ -90,6 +110,7 @@ func (p *Parser) ParseLine(line []byte, ctx source.LineContext) ([]source.Record
 	if err := json.Unmarshal(line, &env); err != nil {
 		return nil, fmt.Errorf("codex: parse envelope: %w", err)
 	}
+	p.noteLine(ctx)
 
 	switch env.Type {
 	case "turn_context":
@@ -159,30 +180,47 @@ func (p *Parser) handleTokenCount(ts time.Time, ctx source.LineContext, payload 
 	}
 
 	var deltaIn, deltaOut, cacheRead int64
+	tu := tcp.Info.TotalTokenUsage
 
-	if lu := tcp.Info.LastTokenUsage; lu != nil {
+	switch {
+	case tcp.Info.LastTokenUsage != nil:
 		// Preferred path: per-turn exact delta from last_token_usage.
 		// OpenAI token field mapping:
 		//   input_tokens includes cached_input_tokens → non-cached = input - cached
 		//   reasoning_output_tokens is part of output (fold into Out)
 		//   cache_create = 0 (Codex/OpenAI has no cache-write tier)
+		lu := tcp.Info.LastTokenUsage
 		deltaIn = clamp(lu.InputTokens - lu.CachedInputTokens)
 		cacheRead = clamp(lu.CachedInputTokens)
 		deltaOut = clamp(lu.OutputTokens + lu.ReasoningOutputTokens)
-	} else if tu := tcp.Info.TotalTokenUsage; tu != nil {
+
+	case tu != nil:
 		// Fallback path: delta-subtract cumulative total_token_usage.
 		// This prevents the 91x inflation bug (ccusage #950) where summing
 		// cumulative totals across turns inflates the session token count.
-		newCumIn := tu.InputTokens
-		newCumOut := tu.OutputTokens
-		deltaIn = clamp(newCumIn - s.prevCumIn)
-		deltaOut = clamp(newCumOut - s.prevCumOut)
-		s.prevCumIn = newCumIn
-		s.prevCumOut = newCumOut
-	} else {
+		if !s.cumSeen && s.firstOffset > 0 {
+			// The file was resumed mid-way after a restart, so the in-memory
+			// baseline is gone: adopt these totals instead of counting the
+			// whole session again.
+			s.setCumBaseline(tu)
+			p.mu.Unlock()
+			return nil, nil
+		}
+		// Mirror the per-turn field mapping so both paths produce the same
+		// shape of record.
+		cacheRead = clamp(tu.CachedInputTokens - s.prevCumCached)
+		deltaIn = clamp(tu.InputTokens - s.prevCumIn - cacheRead)
+		deltaOut = clamp(tu.OutputTokens-s.prevCumOut) + clamp(tu.ReasoningOutputTokens-s.prevCumReason)
+
+	default:
 		// No usage fields at all — emit nothing.
 		p.mu.Unlock()
 		return nil, nil
+	}
+
+	if tu != nil {
+		// Keep the baseline fresh whichever path produced the deltas.
+		s.setCumBaseline(tu)
 	}
 
 	p.mu.Unlock()
@@ -206,6 +244,19 @@ func (p *Parser) handleTokenCount(ts time.Time, ctx source.LineContext, payload 
 	return []source.Record{r}, nil
 }
 
+// noteLine records where the first line of a session was read from. A non-zero
+// first offset means the collector resumed the file mid-way, so the in-memory
+// cumulative baseline cannot be trusted to start at zero.
+func (p *Parser) noteLine(ctx source.LineContext) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	s := p.getOrCreateSession(ctx.SessionUUID)
+	if !s.seen {
+		s.seen = true
+		s.firstOffset = ctx.LineOffset
+	}
+}
+
 // getOrCreateSession returns the session state for sessionUUID.
 // Caller must hold p.mu.
 func (p *Parser) getOrCreateSession(sessionUUID string) *sessionState {
@@ -217,17 +268,33 @@ func (p *Parser) getOrCreateSession(sessionUUID string) *sessionState {
 	return s
 }
 
-// warnOnceFor logs an unknown line type once per Parser instance.
+// warnOnceFor reports an unknown line type once per Parser instance. The line
+// is still skipped — the Codex format may add new types — but the drift is
+// recorded so it does not go unnoticed.
 func (p *Parser) warnOnceFor(lineType string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.warnOnce[lineType] {
+		p.mu.Unlock()
 		return
 	}
 	p.warnOnce[lineType] = true
-	// Soft warning: unknown Codex rollout line type. Skipping.
-	// This is intentional — the Codex format may add new types in future versions.
-	_ = lineType // suppress unused warning; real impl would log to stderr
+	warn := p.OnWarn
+	p.mu.Unlock()
+	if warn != nil {
+		warn(fmt.Sprintf("codex: unknown rollout line type %q — skipping", lineType))
+	}
+}
+
+// UnknownTypes returns the unknown rollout line types seen so far.
+func (p *Parser) UnknownTypes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, 0, len(p.warnOnce))
+	for t := range p.warnOnce {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // clamp returns max(0, v) to guard against underflow on malformed lines.

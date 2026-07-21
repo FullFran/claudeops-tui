@@ -13,12 +13,12 @@ import (
 // --- T2.6: CODEX_HOME root resolution + fixture ingest round-trip ---
 
 func TestCodexRoot(t *testing.T) {
-	t.Run("REQ-2.6: CODEX_HOME env var used when set", func(t *testing.T) {
+	t.Run("REQ-2.6: sessions dir under CODEX_HOME when set", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("CODEX_HOME", dir)
 		root := CodexRoot()
-		if root != dir {
-			t.Errorf("want %q, got %q", dir, root)
+		if want := filepath.Join(dir, "sessions"); root != want {
+			t.Errorf("want %q, got %q", want, root)
 		}
 	})
 

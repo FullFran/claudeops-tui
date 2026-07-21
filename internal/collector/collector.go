@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,9 +50,15 @@ type Collector struct {
 	parseErrors atomic.Int64
 	unknown     atomic.Int64
 	ingested    atomic.Int64
+	emitErrors  atomic.Int64
+	fileErrors  atomic.Int64
 
 	mu       sync.Mutex
 	watching map[string]bool // file path → true
+
+	// watchReady, when non-nil, is called once Watch has registered every
+	// directory. Tests use it to avoid racing file creation against setup.
+	watchReady func()
 }
 
 // New builds a Collector using the classic direct-store path.
@@ -97,6 +104,13 @@ func (c *Collector) ParseErrorCount() int64 { return c.parseErrors.Load() }
 // UnknownCount returns the number of unknown event types skipped.
 func (c *Collector) UnknownCount() int64 { return c.unknown.Load() }
 
+// EmitErrorCount returns the number of events whose write to the sink failed.
+func (c *Collector) EmitErrorCount() int64 { return c.emitErrors.Load() }
+
+// FileErrorCount returns the number of files skipped because they could not be
+// read. They are retried on the next pass.
+func (c *Collector) FileErrorCount() int64 { return c.fileErrors.Load() }
+
 // IngestExisting walks `root` once and ingests every JSONL file found,
 // honoring persisted offsets so it can be called repeatedly.
 func (c *Collector) IngestExisting(ctx context.Context) error {
@@ -112,7 +126,12 @@ func (c *Collector) IngestExisting(ctx context.Context) error {
 			return nil
 		}
 		if err := c.ingestFile(ctx, path, offsets[path]); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return err
+			}
+			// A single unreadable file must not abort the walk — it keeps its
+			// offset and is retried on the next pass.
+			c.fileErrors.Add(1)
 		}
 		return nil
 	})
@@ -151,12 +170,18 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 		return nil // file may have rotated; ignore
 	}
 	defer f.Close()
+	if stat, err := f.Stat(); err == nil && start > stat.Size() {
+		// Truncation, rotation or an editor atomic save left the stored offset
+		// past EOF; re-read from the beginning (uuid dedup makes that safe).
+		start = 0
+	}
 	if start > 0 {
 		if _, err := f.Seek(start, io.SeekStart); err != nil {
 			return err
 		}
 	}
 	br := bufio.NewReaderSize(f, 1<<20)
+	fileCtx := c.fileContext(path)
 	off := start
 	for {
 		select {
@@ -165,16 +190,22 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 		default:
 		}
 		line, err := br.ReadBytes('\n')
-		if len(line) > 0 {
-			lineStart := off
-			off += int64(len(line))
-			c.handleLine(ctx, path, lineStart, line)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
 		}
-		if errors.Is(err, io.EOF) {
+		if len(line) == 0 || line[len(line)-1] != '\n' {
+			// The writer has not flushed the newline yet: leave the fragment
+			// unconsumed so the next pass re-reads the line whole.
 			break
 		}
-		if err != nil {
-			return err
+		if !c.handleLine(ctx, fileCtx, off, line) {
+			// The sink refused an event for a reason that may clear up: hold
+			// the offset at this line so the next pass retries it.
+			break
+		}
+		off += int64(len(line))
+		if errors.Is(err, io.EOF) {
+			break
 		}
 	}
 	stat, _ := f.Stat()
@@ -185,56 +216,102 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 	return c.saveOffset(path, off, size)
 }
 
-func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64, line []byte) {
+// handleLine processes one newline-terminated line. It reports false when the
+// line could not be persisted for a reason that may clear up later, so the
+// caller keeps the offset at this line instead of skipping the event.
+func (c *Collector) handleLine(ctx context.Context, fileCtx source.LineContext, lineStart int64, line []byte) bool {
 	// strip trailing newline before parsing
 	for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
 		line = line[:len(line)-1]
 	}
 	if len(line) == 0 {
-		return
+		return true
 	}
 
 	// Source-seam path: use LineParser + Sink.
 	if c.lineParser != nil && c.sink != nil {
-		lctx := source.LineContext{
-			Path:       path,
-			LineOffset: lineStart,
-		}
+		lctx := fileCtx
+		lctx.LineOffset = lineStart
 		records, err := c.lineParser.ParseLine(line, lctx)
 		if err != nil {
 			c.parseErrors.Add(1)
-			return
+			return true
 		}
 		for _, r := range records {
-			if err := c.sink.Emit(ctx, r); err == nil {
-				c.ingested.Add(1)
+			if isPermanentReject(r) {
+				c.emitErrors.Add(1)
+				continue
 			}
+			if err := c.sink.Emit(ctx, r); err != nil {
+				c.emitErrors.Add(1)
+				return false
+			}
+			c.ingested.Add(1)
 		}
 		if len(records) == 0 {
 			// Unknown/no-usage line — count as unknown.
 			c.unknown.Add(1)
 		}
-		return
+		return true
 	}
 
 	// Legacy path: direct parser + store (unchanged behavior).
 	ev, err := parser.ParseLine(line)
 	if err != nil {
 		c.parseErrors.Add(1)
-		return
+		return true
 	}
 	switch e := ev.(type) {
 	case parser.AssistantEvent:
-		c.persistAssistant(ctx, e)
+		return c.persistAssistant(ctx, e)
 	case parser.UnknownEvent:
 		c.unknown.Add(1)
 	case parser.UserEvent:
 		// no cost; we still record presence so dashboard can count prompts later
-		c.persistUser(ctx, e)
+		return c.persistUser(ctx, e)
 	}
+	return true
 }
 
-func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEvent) {
+// fileContext derives the per-file identity a source parser needs to synthesize
+// stable ids. Sources like Codex carry no session id inside their events, so it
+// comes from the file name; leaving it empty collapses every file onto one
+// session and makes equal byte offsets collide on the same uuid.
+func (c *Collector) fileContext(path string) source.LineContext {
+	sessionUUID := sessionUUIDFromPath(path)
+	lc := source.LineContext{Path: path, SessionUUID: sessionUUID}
+	if c.sourceName != "" && c.sourceName != source.Claude {
+		// Claude carries cwd per event; other sources fall back to a stable
+		// per-session project key.
+		lc.DefaultCWD = string(c.sourceName) + ":" + sessionUUID
+	}
+	return lc
+}
+
+// sessionUUIDFromPath extracts the session identity from a file name:
+// "rollout-<timestamp>-<uuid>.jsonl" yields <uuid>, anything else yields the
+// name without its extension.
+func sessionUUIDFromPath(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if rest, ok := strings.CutPrefix(name, "rollout-"); ok {
+		if _, uuid, found := strings.Cut(rest, "-"); found && uuid != "" {
+			return uuid
+		}
+	}
+	return name
+}
+
+// isPermanentReject reports whether a record can never be stored, however many
+// times it is retried. Those events are dropped so one malformed line cannot
+// stall a whole file.
+func isPermanentReject(r source.Record) bool {
+	if r.UUID == "" || r.SessionID == "" {
+		return true
+	}
+	return r.Source == source.Claude && r.CWD == ""
+}
+
+func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEvent) bool {
 	se := store.Event{
 		UUID:              e.DedupUUID(),
 		SessionID:         e.Session,
@@ -252,12 +329,10 @@ func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEven
 		cost = c.calc.CostFor(e.Model, e.InTokens, e.OutTokens, e.CacheReadTokens, e.CacheCreateTokens)
 	}
 	taskID := c.tasks.Resolve(e.Session, e.TS)
-	if err := c.store.Insert(ctx, se, cost, taskID); err == nil {
-		c.ingested.Add(1)
-	}
+	return c.insert(ctx, se, cost, taskID)
 }
 
-func (c *Collector) persistUser(ctx context.Context, e parser.UserEvent) {
+func (c *Collector) persistUser(ctx context.Context, e parser.UserEvent) bool {
 	se := store.Event{
 		UUID:      e.UUID,
 		SessionID: e.Session,
@@ -265,7 +340,20 @@ func (c *Collector) persistUser(ctx context.Context, e parser.UserEvent) {
 		Type:      "user",
 		TS:        e.TS,
 	}
-	if err := c.store.Insert(ctx, se, nil, c.tasks.Resolve(e.Session, e.TS)); err == nil {
-		c.ingested.Add(1)
+	return c.insert(ctx, se, nil, c.tasks.Resolve(e.Session, e.TS))
+}
+
+// insert writes one event through the legacy store path, applying the same
+// permanent-reject rule as the source-seam path.
+func (c *Collector) insert(ctx context.Context, se store.Event, cost *float64, taskID *string) bool {
+	if se.UUID == "" || se.SessionID == "" || se.CWD == "" {
+		c.emitErrors.Add(1)
+		return true
 	}
+	if err := c.store.Insert(ctx, se, cost, taskID); err != nil {
+		c.emitErrors.Add(1)
+		return false
+	}
+	c.ingested.Add(1)
+	return true
 }
