@@ -26,53 +26,74 @@ var (
 	errStyle    = lipgloss.NewStyle().Foreground(colErr)
 )
 
+// chromeLines is the number of lines View() always draws around the viewport:
+// title, tab bar, rule, spacer and footer. Modals and the status line add more
+// on top and are absorbed by clipping the body.
+const chromeLines = 5
+
 // View is the entrypoint for Bubbletea.
 func (m Model) View() string {
 	if m.showHelp {
 		return renderHelp(m)
 	}
 
-	var sb strings.Builder
-
 	// Title + tab bar, separated from the body by a full-width rule so the
 	// chrome reads as one header block.
 	brand := titleStyle.Render("◆ claudeops")
-	sb.WriteString(brand + " " + dimStyle.Render(m.Version) + "\n")
-	sb.WriteString(renderTabBar(m.activeTab) + "\n")
-	sb.WriteString(dimStyle.Render(ruleLine(m.width)) + "\n")
+	head := brand + " " + dimStyle.Render(m.Version) + "\n" +
+		renderTabBar(m.activeTab, visibleTabs(m.Settings)) + "\n" +
+		dimStyle.Render(ruleLine(m.width))
 
-	// Body — every tab renders through the viewport so content scrolls
-	// when the terminal is shorter than the rendered content.
-	if m.ready {
-		sb.WriteString(m.viewport.View() + "\n")
-	} else {
-		sb.WriteString(dimStyle.Render("loading…") + "\n")
-	}
-
+	// Tail — modals, status line and footer. Every block is prefixed with a
+	// newline and none ends with one, so the tail height is exact.
+	var tb strings.Builder
 	// Modal: task input
 	if m.taskInputOpen {
-		sb.WriteString("\n" + headerStyle.Render("New task") + "\n")
-		sb.WriteString("  " + m.taskInput.View() + "\n")
-		sb.WriteString(dimStyle.Render("  enter: start · esc: cancel") + "\n")
+		tb.WriteString("\n" + headerStyle.Render("New task") + "\n")
+		tb.WriteString("  " + m.taskInput.View() + "\n")
+		tb.WriteString(dimStyle.Render("  enter: start · esc: cancel") + "\n")
 	}
 	// Modal: settings string edit
 	if m.settingsEditOpen {
-		sb.WriteString("\n" + headerStyle.Render("Edit value") + "\n")
-		sb.WriteString("  " + m.settingsInput.View() + "\n")
-		sb.WriteString(dimStyle.Render("  enter: save · esc: cancel") + "\n")
+		tb.WriteString("\n" + headerStyle.Render("Edit value") + "\n")
+		tb.WriteString("  " + m.settingsInput.View() + "\n")
+		tb.WriteString(dimStyle.Render("  enter: save · esc: cancel") + "\n")
 	}
-
 	// Transient status line (last action result)
 	if m.statusMsg != "" {
-		sb.WriteString("\n" + warnStyle.Render(m.statusMsg))
+		tb.WriteString("\n" + warnStyle.Render(m.statusMsg))
+	}
+	// Footer — context-sensitive hints per view mode.
+	tb.WriteString("\n" + dimStyle.Render(fmt.Sprintf("pricing updated: %s   %s",
+		m.PricingUpdated, contextHints(m))))
+	tail := tb.String()
+
+	// Body — every tab renders through the viewport so content scrolls
+	// when the terminal is shorter than the rendered content.
+	body := dimStyle.Render("loading…")
+	if m.ready {
+		body = m.viewport.View()
+	}
+	// The viewport height is set on resize, but modals and the status line
+	// appear without one. Clip the body to what is actually left so the
+	// renderer never drops the title row off the top of the altscreen.
+	if m.height > 0 {
+		body = clipHeight(body, m.height-lipgloss.Height(head)-lipgloss.Height(tail))
 	}
 
-	// Footer — context-sensitive hints per view mode.
-	hints := contextHints(m)
-	footer := dimStyle.Render(fmt.Sprintf("pricing updated: %s   %s", m.PricingUpdated, hints))
-	sb.WriteString("\n" + footer)
+	return head + "\n" + body + "\n" + tail
+}
 
-	return sb.String()
+// clipHeight truncates s to at most n lines (always keeping at least one).
+func clipHeight(s string, n int) string {
+	if n < 1 {
+		n = 1
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[:n], "\n")
 }
 
 // renderHelp draws the full-screen help overlay.
@@ -85,7 +106,7 @@ func renderHelp(m Model) string {
 		{"tab / shift+tab", "cycle tabs forward / back"},
 		{"← → h l", "cycle tabs"},
 		{"↑ ↓ j k", "scroll content / navigate lists"},
-		{"q / ctrl+c", "quit"},
+		{"q / ctrl+c", "quit (q goes back inside drill-downs)"},
 	} {
 		sb.WriteString("  " + headerStyle.Render(padRight(r[0], 18)) + r[1] + "\n")
 	}
@@ -101,7 +122,7 @@ func renderHelp(m Model) string {
 
 	sb.WriteString("\n" + dimStyle.Render("  Daily breakdown") + "\n")
 	for _, r := range [][2]string{
-		{"j / k", "select day (newer / older)"},
+		{"j / k", "select day (older / newer)"},
 		{"enter", "drill into day detail"},
 		{"esc", "go back"},
 	} {

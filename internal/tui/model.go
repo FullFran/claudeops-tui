@@ -77,7 +77,8 @@ type Model struct {
 	taskInput     textinput.Model
 	taskInputOpen bool
 	showHelp      bool
-	statusMsg     string // transient feedback (e.g. "task started: foo")
+	statusMsg     string    // transient feedback (e.g. "task started: foo")
+	statusUntil   time.Time // when statusMsg stops being displayed
 
 	// settings tab state
 	settingsCursor   int // selected row in the settings list
@@ -93,6 +94,11 @@ type Model struct {
 	// session drill-down state
 	sessCursor int            // index into m.AllSess
 	sessDetail *SessionDetail // loaded on drill-down
+
+	// detailReq is bumped on every drill-down load and on every navigation
+	// away from one, so results that land late are dropped instead of
+	// dragging the user back into a detail view.
+	detailReq int
 }
 
 // viewMode tracks the drill-down level within a tab.
@@ -125,11 +131,12 @@ type SessionDetail struct {
 
 // sessionDetailMsg is the result of loading drill-down data for a single session.
 type sessionDetailMsg struct {
+	req    int
 	detail *SessionDetail
 	err    error
 }
 
-func loadSessionDetailCmd(s *store.Store, sess store.SessionAgg) tea.Cmd {
+func loadSessionDetailCmd(s *store.Store, sess store.SessionAgg, req int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -137,13 +144,13 @@ func loadSessionDetailCmd(s *store.Store, sess store.SessionAgg) tea.Cmd {
 		var err error
 		d.Models, err = s.ModelsForSession(ctx, sess.SessionID)
 		if err != nil {
-			return sessionDetailMsg{err: err}
+			return sessionDetailMsg{req: req, err: err}
 		}
 		d.Hourly, err = s.HourlyForSession(ctx, sess.SessionID)
 		if err != nil {
-			return sessionDetailMsg{err: err}
+			return sessionDetailMsg{req: req, err: err}
 		}
-		return sessionDetailMsg{detail: d}
+		return sessionDetailMsg{req: req, detail: d}
 	}
 }
 
@@ -201,6 +208,20 @@ type otelApplyMsg struct {
 	err error
 }
 
+// pricingWarnMsg carries a pricing warning (unknown model) into the TUI.
+type pricingWarnMsg struct {
+	model string
+}
+
+// PricingWarnSink adapts a Bubbletea send function (tea.Program.Send) to
+// pricing.Calculator.OnWarn, so warnings render in the status line instead of
+// going to stderr, which would corrupt the alternate screen.
+func PricingWarnSink(send func(tea.Msg)) func(string) {
+	return func(model string) {
+		send(pricingWarnMsg{model: model})
+	}
+}
+
 func (m Model) pushNowCmd() tea.Cmd {
 	return func() tea.Msg {
 		if m.Store == nil {
@@ -230,11 +251,12 @@ func (m Model) applyOTelCmd() tea.Cmd {
 
 // dayDetailMsg is the result of loading drill-down data for a single day.
 type dayDetailMsg struct {
+	req    int
 	detail *DayDetail
 	err    error
 }
 
-func loadDayDetailCmd(s *store.Store, day time.Time, agg store.DailyAgg) tea.Cmd {
+func loadDayDetailCmd(s *store.Store, day time.Time, agg store.DailyAgg, req int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -242,17 +264,17 @@ func loadDayDetailCmd(s *store.Store, day time.Time, agg store.DailyAgg) tea.Cmd
 		var err error
 		d.Sessions, err = s.SessionsForDay(ctx, day)
 		if err != nil {
-			return dayDetailMsg{err: err}
+			return dayDetailMsg{req: req, err: err}
 		}
 		d.Models, err = s.ModelsForDay(ctx, day)
 		if err != nil {
-			return dayDetailMsg{err: err}
+			return dayDetailMsg{req: req, err: err}
 		}
 		d.Hourly, err = s.HourlyForDay(ctx, day)
 		if err != nil {
-			return dayDetailMsg{err: err}
+			return dayDetailMsg{req: req, err: err}
 		}
-		return dayDetailMsg{detail: d}
+		return dayDetailMsg{req: req, detail: d}
 	}
 }
 
@@ -449,9 +471,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.settingsSetStr = nil
 					if m.ConfigPath != "" {
 						if err := config.Save(m.ConfigPath, m.Settings); err != nil {
-							m.statusMsg = "config save: " + err.Error()
+							m.setStatus("config save: " + err.Error())
 						} else {
-							m.statusMsg = "saved config.toml"
+							m.setStatus("saved config.toml")
 						}
 					}
 				}
@@ -513,46 +535,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			cmds = append(cmds, refreshCmd(m))
 		case "tab", "right", "l":
-			m.activeTab = (m.activeTab + 1) % tabCount
-			m.viewMode = viewNormal
-			m.refreshViewport()
+			m.selectTab(nextVisibleTab(m.activeTab, m.Settings, 1))
 		case "shift+tab", "left", "h":
-			m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "1":
-			m.activeTab = TabDashboard
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "2":
-			m.activeTab = TabSessions
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "3":
-			m.activeTab = TabProjects
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "4":
-			m.activeTab = TabModels
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "5":
-			m.activeTab = TabTasks
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "6":
-			m.activeTab = TabInsights
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "7":
-			m.activeTab = TabClassroom
-			m.viewMode = viewNormal
-			m.refreshViewport()
-		case "8":
-			m.activeTab = TabSettings
-			m.viewMode = viewNormal
-			m.settingsCursor = 1 // skip first section header
-			m.refreshViewport()
+			m.selectTab(nextVisibleTab(m.activeTab, m.Settings, -1))
+		case "1", "2", "3", "4", "5", "6", "7", "8":
+			t := Tab(msg.String()[0] - '1')
+			if tabVisible(t, m.Settings) {
+				m.selectTab(t)
+			}
+			return m, nil
 		case " ":
 			if m.activeTab == TabSettings {
 				items := settingsItems()
@@ -561,6 +552,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.toggleSettingsItem()
 					m.refreshViewport()
 				}
+				// Handled: do not fall through to the viewport, which binds
+				// space to PageDown.
+				return m, nil
 			}
 		case "enter":
 			if m.activeTab == TabSettings {
@@ -581,29 +575,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, textinput.Blink
 					case item.actionKey == "push_now":
 						if !m.Settings.Export.Enabled {
-							m.statusMsg = "export disabled — toggle Enabled in the Export Metrics section first"
+							m.setStatus("export disabled — toggle Enabled in the Export Metrics section first")
 							m.refreshViewport()
 							return m, nil
 						}
 						if m.Settings.Export.Endpoint == "" {
-							m.statusMsg = "no endpoint set — edit Endpoint in the Export Metrics section first"
+							m.setStatus("no endpoint set — edit Endpoint in the Export Metrics section first")
 							m.refreshViewport()
 							return m, nil
 						}
-						m.statusMsg = "pushing…"
+						m.setStatus("pushing…")
 						return m, m.pushNowCmd()
 					case item.actionKey == "apply_otel":
 						if !m.Settings.Export.ClaudeOTel.Enabled {
-							m.statusMsg = "claude_otel disabled — toggle Enabled in the Claude Code OTel section first"
+							m.setStatus("claude_otel disabled — toggle Enabled in the Claude Code OTel section first")
 							m.refreshViewport()
 							return m, nil
 						}
 						if m.Settings.Export.Endpoint == "" {
-							m.statusMsg = "no endpoint set — edit Endpoint in the Export Metrics section first"
+							m.setStatus("no endpoint set — edit Endpoint in the Export Metrics section first")
 							m.refreshViewport()
 							return m, nil
 						}
-						m.statusMsg = "applying OTel config…"
+						m.setStatus("applying OTel config…")
 						return m, m.applyOTelCmd()
 					}
 				}
@@ -616,12 +610,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sessCursor = 0
 				m.refreshViewport()
 			}
+			return m, nil
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Reserve 4 lines for tab bar + footer.
-		vpH := msg.Height - 4
+		// Reserve the chrome View() always draws: title, tab bar, rule,
+		// spacer and footer.
+		vpH := msg.Height - chromeLines
 		if vpH < 5 {
 			vpH = 5
 		}
@@ -634,10 +630,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 	case tickMsg:
+		if m.statusMsg != "" && time.Now().After(m.statusUntil) {
+			m.statusMsg = ""
+			m.refreshViewport()
+		}
 		cmds = append(cmds, refreshCmd(m), tickCmd())
 	case dayDetailMsg:
+		if msg.req != m.detailReq {
+			break // a later navigation already invalidated this request
+		}
 		if msg.err != nil {
-			m.statusMsg = "day detail: " + msg.err.Error()
+			m.setStatus("day detail: " + msg.err.Error())
 			m.viewMode = viewDayBrowse
 		} else {
 			m.dayDetail = msg.detail
@@ -645,8 +648,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport()
 	case sessionDetailMsg:
+		if msg.req != m.detailReq {
+			break // a later navigation already invalidated this request
+		}
 		if msg.err != nil {
-			m.statusMsg = "session detail: " + msg.err.Error()
+			m.setStatus("session detail: " + msg.err.Error())
 			m.viewMode = viewSessionBrowse
 		} else {
 			m.sessDetail = msg.detail
@@ -655,26 +661,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 	case taskActionMsg:
 		if msg.err != nil {
-			m.statusMsg = "task error: " + msg.err.Error()
+			m.setStatus("task error: " + msg.err.Error())
 		} else {
-			m.statusMsg = msg.status
+			m.setStatus(msg.status)
 		}
 		cmds = append(cmds, refreshCmd(m))
 	case exportPushMsg:
 		if msg.err != nil {
-			m.statusMsg = "push failed: " + msg.err.Error()
+			m.setStatus("push failed: " + msg.err.Error())
 		} else {
-			m.statusMsg = fmt.Sprintf("pushed %d data points  %s → %s",
+			m.setStatus(fmt.Sprintf("pushed %d data points  %s → %s",
 				msg.result.DataPoints,
 				msg.result.PeriodFrom.Format("Jan 02 15:04"),
-				msg.result.PeriodTo.Format("Jan 02 15:04"))
+				msg.result.PeriodTo.Format("Jan 02 15:04")))
 		}
+		m.refreshViewport()
+	case pricingWarnMsg:
+		m.setStatus(fmt.Sprintf("pricing has no entry for model %q", msg.model))
 		m.refreshViewport()
 	case otelApplyMsg:
 		if msg.err != nil {
-			m.statusMsg = "otel-config failed: " + msg.err.Error()
+			m.setStatus("otel-config failed: " + msg.err.Error())
 		} else {
-			m.statusMsg = "OTel config written to ~/.claude/settings.json"
+			m.setStatus("OTel config written to ~/.claude/settings.json")
 		}
 		m.refreshViewport()
 	case refreshMsg:
@@ -714,6 +723,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// statusTTL is how long the status line keeps the last action's feedback
+// before a tick clears it. It is transient, not a permanent banner.
+const statusTTL = 8 * time.Second
+
+// setStatus shows s in the status line for statusTTL.
+func (m *Model) setStatus(s string) {
+	m.statusMsg = s
+	m.statusUntil = time.Now().Add(statusTTL)
+}
+
+// nextDetailReq invalidates any in-flight drill-down load and returns the id
+// to stamp on the new one.
+func (m *Model) nextDetailReq() int {
+	m.detailReq++
+	return m.detailReq
+}
+
+// selectTab switches to t, leaving any drill-down behind.
+func (m *Model) selectTab(t Tab) {
+	m.activeTab = t
+	m.viewMode = viewNormal
+	m.detailReq++
+	if t == TabSettings {
+		m.settingsCursor = firstSettingsRow()
+	}
+	m.refreshViewport()
+}
+
+// firstSettingsRow returns the index of the first selectable settings row.
+func firstSettingsRow() int {
+	for i, item := range settingsItems() {
+		if !isSettingsNonNav(item) {
+			return i
+		}
+	}
+	return 0
+}
+
 // isSettingsNonNav reports whether an item should be skipped during cursor navigation.
 func isSettingsNonNav(item settingsItem) bool {
 	return item.section || item.skip
@@ -742,11 +789,18 @@ func (m *Model) moveSettingsCursor(delta int) {
 
 // updateDrillDown handles keys when in day browse or day detail mode.
 func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The footer advertises `? help` in every drill-down, so honour it here
+	// too — the top-level handler never sees these keys.
+	if msg.String() == "?" {
+		m.showHelp = true
+		return m, nil
+	}
 	switch m.viewMode {
 	case viewDayBrowse:
 		switch msg.String() {
 		case "esc", "q":
 			m.viewMode = viewNormal
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		case "j", "down":
@@ -766,7 +820,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.dayCursor >= 0 && m.dayCursor < len(m.Daily) && m.Store != nil {
 				day := m.Daily[m.dayCursor]
-				return m, loadDayDetailCmd(m.Store, day.Date, day)
+				return m, loadDayDetailCmd(m.Store, day.Date, day, m.nextDetailReq())
 			}
 		}
 	case viewDayDetail:
@@ -774,6 +828,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			m.viewMode = viewDayBrowse
 			m.dayDetail = nil
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		}
@@ -781,6 +836,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc", "q":
 			m.viewMode = viewNormal
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		case "j", "down":
@@ -797,7 +853,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.sessCursor >= 0 && m.sessCursor < len(m.AllSess) && m.Store != nil {
-				return m, loadSessionDetailCmd(m.Store, m.AllSess[m.sessCursor])
+				return m, loadSessionDetailCmd(m.Store, m.AllSess[m.sessCursor], m.nextDetailReq())
 			}
 		}
 	case viewSessionDetail:
@@ -805,6 +861,7 @@ func (m Model) updateDrillDown(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			m.viewMode = viewSessionBrowse
 			m.sessDetail = nil
+			m.detailReq++
 			m.refreshViewport()
 			return m, nil
 		}
@@ -919,9 +976,9 @@ func (m *Model) toggleSettingsItem() {
 	item.toggle(&m.Settings)
 	if m.ConfigPath != "" {
 		if err := config.Save(m.ConfigPath, m.Settings); err != nil {
-			m.statusMsg = "config save: " + err.Error()
+			m.setStatus("config save: " + err.Error())
 		} else {
-			m.statusMsg = "saved config.toml"
+			m.setStatus("saved config.toml")
 		}
 	}
 }
