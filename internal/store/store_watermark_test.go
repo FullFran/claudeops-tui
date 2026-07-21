@@ -126,7 +126,11 @@ func TestSourceWatermark(t *testing.T) {
 			t.Fatalf("first Open: %v", err)
 		}
 		_ = s1.SaveSourceWatermark("opencode", "xyz")
-		s1.Close()
+		// Closed deliberately before reopening the same path; a failed close
+		// would make the second Open exercise something other than a reopen.
+		if err := s1.Close(); err != nil {
+			t.Fatalf("first Close: %v", err)
+		}
 
 		s2, err := Open(dbPath)
 		if err != nil {

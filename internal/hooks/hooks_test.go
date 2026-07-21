@@ -107,7 +107,9 @@ func TestUninstallRemovesOnlyOurs(t *testing.T) {
 			"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "user-start.sh"}]}]
 		}
 	}`
-	os.WriteFile(path, []byte(initial), 0o600)
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := Install(path, "/bin/claudeops"); err != nil {
 		t.Fatal(err)
@@ -132,7 +134,9 @@ func TestStatus(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	binary := filepath.Join(dir, "claudeops")
-	os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755)
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	r, err := Status(path, binary)
 	if err != nil {
@@ -147,7 +151,9 @@ func TestStatus(t *testing.T) {
 		t.Error("BinaryExists should be true")
 	}
 
-	Install(path, binary)
+	if err := Install(path, binary); err != nil {
+		t.Fatal(err)
+	}
 	r, _ = Status(path, binary)
 	for _, ev := range ManagedEvents {
 		if !r.Events[ev] {
@@ -185,7 +191,9 @@ func TestHandleWritesSidecar(t *testing.T) {
 				t.Fatalf("sidecar missing: %v", err)
 			}
 			var sc Sidecar
-			json.Unmarshal(raw, &sc)
+			if err := json.Unmarshal(raw, &sc); err != nil {
+				t.Fatalf("unmarshal sidecar: %v", err)
+			}
 			if sc.State != c.wantState {
 				t.Errorf("state: want %q got %q", c.wantState, sc.State)
 			}
@@ -200,9 +208,13 @@ func TestHandleSessionEndRemovesSidecar(t *testing.T) {
 	dir := t.TempDir()
 	liveDir := filepath.Join(dir, "live")
 
-	os.MkdirAll(liveDir, 0o700)
+	if err := os.MkdirAll(liveDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	sidecarPath := filepath.Join(liveDir, "abc-123.json")
-	os.WriteFile(sidecarPath, []byte("{}"), 0o600)
+	if err := os.WriteFile(sidecarPath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	payload := `{"session_id":"abc-123","hook_event_name":"SessionEnd"}`
 	if err := Handle(strings.NewReader(payload), liveDir); err != nil {
@@ -226,9 +238,13 @@ func TestHandleIgnoresEmptyOrBadInput(t *testing.T) {
 func TestSaveBacksUpPreviousFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
-	os.WriteFile(path, []byte(`{"model":"old"}`), 0o600)
+	if err := os.WriteFile(path, []byte(`{"model":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	Install(path, "/bin/claudeops")
+	if err := Install(path, "/bin/claudeops"); err != nil {
+		t.Fatal(err)
+	}
 
 	entries, _ := os.ReadDir(dir)
 	foundBackup := false

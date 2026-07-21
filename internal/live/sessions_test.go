@@ -160,7 +160,9 @@ func TestScan_SidecarOverridesState(t *testing.T) {
 		now.Add(-2*time.Minute))
 
 	sc := `{"session_id":"sid-1","project_path":"/home/u/proj","state":"working","last_event":"UserPromptSubmit","updated_at":"2026-04-17T12:00:00Z"}`
-	os.WriteFile(filepath.Join(liveDir, "sid-1.json"), []byte(sc), 0o600)
+	if err := os.WriteFile(filepath.Join(liveDir, "sid-1.json"), []byte(sc), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	sessions, err := Scan(root, Config{
 		WorkingWindow: 8 * time.Second,
@@ -190,7 +192,9 @@ func TestScan_SidecarKeepsStaleSessionVisible(t *testing.T) {
 		now.Add(-2*time.Hour))
 
 	sc := `{"session_id":"sid-2","project_path":"/home/u/old","state":"waiting","last_event":"Stop","updated_at":"2026-04-17T11:59:00Z"}`
-	os.WriteFile(filepath.Join(liveDir, "sid-2.json"), []byte(sc), 0o600)
+	if err := os.WriteFile(filepath.Join(liveDir, "sid-2.json"), []byte(sc), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	sessions, err := Scan(root, Config{
 		ActiveWindow: 5 * time.Minute,

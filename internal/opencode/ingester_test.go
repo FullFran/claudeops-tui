@@ -436,7 +436,11 @@ func TestIngesterName(t *testing.T) {
 func TestIngesterWatchCancels(t *testing.T) {
 	dir := t.TempDir()
 	db := makeFixtureDB(t, dir)
-	db.Close()
+	// Closed deliberately so the ingester reopens the file by path; a failed
+	// close would leave the fixture locked and the reopen would not be tested.
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture db: %v", err)
+	}
 
 	wm := newFakeStore()
 	sink := &fakeSink{}

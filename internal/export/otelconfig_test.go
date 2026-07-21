@@ -29,6 +29,19 @@ func readEnvMapFromFile(t *testing.T, path string) map[string]string {
 }
 
 // readTopLevelKeys returns all top-level keys in the settings.json file.
+// writeJSONFile seeds a settings file for a test. A setup write that fails
+// silently would leave the assertions running against a missing file.
+func writeJSONFile(t *testing.T, path string, v any) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal seed: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+}
+
 func readTopLevelKeys(t *testing.T, path string) map[string]json.RawMessage {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -89,8 +102,7 @@ func TestApplyOTelConfig_PreservesExistingEnvVars(t *testing.T) {
 			"MY_VAR": "hello",
 		},
 	}
-	data, _ := json.Marshal(initial)
-	os.WriteFile(path, data, 0o600)
+	writeJSONFile(t, path, initial)
 
 	cfg := OTelConfigInput{Endpoint: "http://localhost:4318"}
 	if err := applyOTelConfigInput(path, cfg); err != nil {
@@ -114,8 +126,7 @@ func TestApplyOTelConfig_PreservesTopLevelKeys(t *testing.T) {
 		"model": "claude-opus-4-5",
 		"env":   map[string]string{},
 	}
-	data, _ := json.Marshal(initial)
-	os.WriteFile(path, data, 0o600)
+	writeJSONFile(t, path, initial)
 
 	cfg := OTelConfigInput{Endpoint: "http://localhost:4318"}
 	if err := applyOTelConfigInput(path, cfg); err != nil {
@@ -127,7 +138,9 @@ func TestApplyOTelConfig_PreservesTopLevelKeys(t *testing.T) {
 		t.Error("top-level 'model' key should be preserved")
 	}
 	var model string
-	json.Unmarshal(top["model"], &model)
+	if err := json.Unmarshal(top["model"], &model); err != nil {
+		t.Fatalf("unmarshal model: %v", err)
+	}
 	if model != "claude-opus-4-5" {
 		t.Errorf("model = %q, want %q", model, "claude-opus-4-5")
 	}
@@ -305,7 +318,9 @@ func TestRemoveOTelConfig_RemovesManagedKeys(t *testing.T) {
 
 	// Apply first.
 	cfg := OTelConfigInput{Endpoint: "http://localhost:4318"}
-	applyOTelConfigInput(path, cfg)
+	if err := applyOTelConfigInput(path, cfg); err != nil {
+		t.Fatalf("applyOTelConfigInput: %v", err)
+	}
 
 	// Also add a non-managed key.
 	s, _ := loadOrEmpty(path)
@@ -314,7 +329,9 @@ func TestRemoveOTelConfig_RemovesManagedKeys(t *testing.T) {
 		t.Fatalf("readEnvMap: %v", err)
 	}
 	env["KEEP_ME"] = "yes"
-	writeEnvMap(path, s, env)
+	if err := writeEnvMap(path, s, env); err != nil {
+		t.Fatalf("writeEnvMap: %v", err)
+	}
 
 	if err := RemoveOTelConfig(path); err != nil {
 		t.Fatalf("RemoveOTelConfig: %v", err)
@@ -338,8 +355,7 @@ func TestRemoveOTelConfig_NoPanicWhenNoManagedKeys(t *testing.T) {
 	initial := map[string]interface{}{
 		"env": map[string]string{"MY_VAR": "hello"},
 	}
-	data, _ := json.Marshal(initial)
-	os.WriteFile(path, data, 0o600)
+	writeJSONFile(t, path, initial)
 
 	if err := RemoveOTelConfig(path); err != nil {
 		t.Fatalf("RemoveOTelConfig on clean file: %v", err)
@@ -352,7 +368,9 @@ func TestRemoveOTelConfig_CreatesBakFile(t *testing.T) {
 
 	// Apply to create file with content.
 	cfg := OTelConfigInput{Endpoint: "http://localhost:4318"}
-	applyOTelConfigInput(path, cfg)
+	if err := applyOTelConfigInput(path, cfg); err != nil {
+		t.Fatalf("applyOTelConfigInput: %v", err)
+	}
 
 	if err := RemoveOTelConfig(path); err != nil {
 		t.Fatalf("RemoveOTelConfig: %v", err)
@@ -374,8 +392,7 @@ func TestStatusOTelConfig_NotApplied(t *testing.T) {
 	initial := map[string]interface{}{
 		"env": map[string]string{"MY_VAR": "hello"},
 	}
-	data, _ := json.Marshal(initial)
-	os.WriteFile(path, data, 0o600)
+	writeJSONFile(t, path, initial)
 
 	status, err := StatusOTelConfig(path)
 	if err != nil {
@@ -391,7 +408,9 @@ func TestStatusOTelConfig_Applied(t *testing.T) {
 	path := filepath.Join(dir, "settings.json")
 
 	cfg := OTelConfigInput{Endpoint: "http://localhost:4318"}
-	applyOTelConfigInput(path, cfg)
+	if err := applyOTelConfigInput(path, cfg); err != nil {
+		t.Fatalf("applyOTelConfigInput: %v", err)
+	}
 
 	status, err := StatusOTelConfig(path)
 	if err != nil {
