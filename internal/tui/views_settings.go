@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -131,16 +132,12 @@ func settingsItems() []settingsItem {
 
 		// ── MCP Server ───────────────────────────────────────────────────────
 		{section: true, label: "MCP Server"},
-		{label: "Claude Code", desc: "expose usage data via MCP",
-			get: func(_ config.Settings) bool {
-				return mcpConfigExists("claudeops")
-			},
-			toggle: func(_ *config.Settings) {
-				toggleMCPConfig("claudeops", []byte(`{
-  "command": "claudeops",
-  "args": ["mcp"]
-}
-`))
+		{skip: true, label: "Claude Code", desc: "register with: claude mcp add claudeops -- claudeops mcp",
+			readValue: func(_ config.Settings) string {
+				if mcpRegistered("claudeops") {
+					return "registered"
+				}
+				return "not registered"
 			}},
 
 		// ── Export Metrics ───────────────────────────────────────────────────
@@ -192,24 +189,27 @@ func settingsItems() []settingsItem {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-func mcpConfigPath(name string) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "mcp", name+".json")
-}
-
-func mcpConfigExists(name string) bool {
-	_, err := os.Stat(mcpConfigPath(name))
-	return err == nil
-}
-
-func toggleMCPConfig(name string, content []byte) {
-	path := mcpConfigPath(name)
-	if mcpConfigExists(name) {
-		os.Remove(path)
-		return
+// mcpRegistered reports whether an MCP server is registered under the given
+// name in ~/.claude.json, where `claude mcp add` writes user-scoped servers.
+// Registration is read-only here: rewriting that file behind the user's back
+// is not something a settings row should do.
+func mcpRegistered(name string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
 	}
-	os.MkdirAll(filepath.Dir(path), 0o700)
-	os.WriteFile(path, content, 0o600)
+	b, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return false
+	}
+	_, ok := cfg.MCPServers[name]
+	return ok
 }
 
 // ── Styles ───────────────────────────────────────────────────────────────────
