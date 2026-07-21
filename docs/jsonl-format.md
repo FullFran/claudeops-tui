@@ -1,6 +1,8 @@
-# Claude Code JSONL Format Reference
+# JSONL Format Reference
 
-Notes from inspecting real session files on Claude Code `2.1.96` under `~/.claude/projects/`. Treat this as **observed**, not authoritative — Anthropic does not document this format.
+Notes from inspecting real session files on Claude Code `2.1.96` under
+`~/.claude/projects/`, plus the Codex rollout schema at the end. Treat this as
+**observed**, not authoritative — neither format is documented by its vendor.
 
 ## File location
 
@@ -99,3 +101,46 @@ Treating cache reads as full input → overcost by ~10×. Ignoring cache creatio
 Pricing seed in `internal/pricing/pricing.seed.toml` ships with these. Bracket
 suffixes (`[1m]`) fall back to the base model's price when no explicit entry
 exists. Unknown models leave `cost_eur` NULL and warn once.
+
+## Codex rollout files
+
+Codex CLI writes its own JSONL under `$CODEX_HOME/sessions/**/rollout-*.jsonl`
+(default `~/.codex/sessions`). The shape is different enough to need its own
+parser (`internal/codex`).
+
+**This schema is spec-derived, not observed on a real install.** Validate it
+against your own rollout files before trusting the numbers.
+
+Every line is an envelope:
+
+```json
+{ "timestamp": "...", "type": "token_count", "payload": { ... } }
+```
+
+| `type` | Payload | Use |
+|---|---|---|
+| `turn_context` | `model`, `cwd` | sets the active model and cwd for the following lines |
+| `token_count` | `info.last_token_usage` and/or `info.total_token_usage` | the usage events |
+| anything else | — | warned once per type, then skipped |
+
+Token deltas prefer `info.last_token_usage` (already per turn). When only
+`info.total_token_usage` is present it is **cumulative**, so the parser
+subtracts the previous total for that session; summing the raw values instead
+inflates a session's tokens by orders of magnitude. Field mapping:
+
+| Codex field | claudeops class |
+|---|---|
+| `input_tokens` − `cached_input_tokens` | input |
+| `cached_input_tokens` | cache read |
+| `output_tokens` + `reasoning_output_tokens` | output |
+| — | cache create is always 0; Codex has no cache-write tier |
+
+Rollout lines carry no session id, so it is derived from the filename — for
+`rollout-*.jsonl`, everything after the first `-` that follows the `rollout-`
+prefix; otherwise the base name — and event uuids are synthesized from that
+session identity plus the line's byte offset. Sessions appear as
+`codex:<uuid>`, and the project key falls back to `codex:<uuid>` when
+`turn_context` never supplied a cwd.
+
+OpenAI prices are **not** baked into the parser. Models with no entry in
+`pricing.toml` ingest with tokens recorded and `cost_eur` NULL.

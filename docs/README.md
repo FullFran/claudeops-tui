@@ -7,7 +7,7 @@ Local TUI to track Claude Code, Codex and opencode usage, costs, and tasks.
 - [architecture.md](./architecture.md) — package map, data flow, concurrency, schema
 - [upgrading.md](./upgrading.md) — behavior changes that need action from you
 - [providers.md](./providers.md) — built-in and user-defined live quota providers
-- [jsonl-format.md](./jsonl-format.md) — observed `~/.claude/projects/*.jsonl` event shapes
+- [jsonl-format.md](./jsonl-format.md) — observed Claude Code and Codex event shapes
 - [oauth-usage-endpoint.md](./oauth-usage-endpoint.md) — undocumented `/api/oauth/usage` reference
 - [limitations.md](./limitations.md) — known gaps, risks, fragile dependencies
 - [plan.md](./plan.md) — original vision, what shipped, what did not

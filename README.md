@@ -434,7 +434,7 @@ drill-downs, computed insights, live Classroom, MCP server, and OTLP export.
 - [`docs/architecture.md`](./docs/architecture.md) — package map, data flow, decisions
 - [`docs/upgrading.md`](./docs/upgrading.md) — behavior changes that need action from you
 - [`docs/providers.md`](./docs/providers.md) — built-in and user-defined quota providers
-- [`docs/jsonl-format.md`](./docs/jsonl-format.md) — observed event shapes
+- [`docs/jsonl-format.md`](./docs/jsonl-format.md) — observed Claude Code and Codex event shapes
 - [`docs/oauth-usage-endpoint.md`](./docs/oauth-usage-endpoint.md) — endpoint reference
 - [`docs/limitations.md`](./docs/limitations.md) — what's broken, fragile, or missing
 - [`docs/plan.md`](./docs/plan.md) — original vision and phasing (historical)
