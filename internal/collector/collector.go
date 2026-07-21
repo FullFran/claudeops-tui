@@ -169,16 +169,18 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 		default:
 		}
 		line, err := br.ReadBytes('\n')
-		if len(line) > 0 {
-			lineStart := off
-			off += int64(len(line))
-			c.handleLine(ctx, path, lineStart, line)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
 		}
-		if errors.Is(err, io.EOF) {
+		if len(line) == 0 || line[len(line)-1] != '\n' {
+			// The writer has not flushed the newline yet: leave the fragment
+			// unconsumed so the next pass re-reads the line whole.
 			break
 		}
-		if err != nil {
-			return err
+		c.handleLine(ctx, path, off, line)
+		off += int64(len(line))
+		if errors.Is(err, io.EOF) {
+			break
 		}
 	}
 	stat, _ := f.Stat()
