@@ -1,0 +1,53 @@
+name: ci
+
+# Gate every pull request and every push to main on the same checks a
+# developer runs locally with `make ci`. Before this workflow the only
+# automation was release.yml, which runs on version tags only — commits
+# between releases were never tested.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build ./...
+
+      - name: Test (race)
+        run: go test -race ./...
+
+      # golangci-lint has never been enforced on this codebase and currently
+      # reports ~50 findings (errcheck, staticcheck, unused). Surface them
+      # without blocking; drop continue-on-error once the backlog is cleared.
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        continue-on-error: true
+        with:
+          version: v2.12

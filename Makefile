@@ -6,7 +6,7 @@ PKG    := ./cmd/claudeops
 # Tracked Go files only, so gofmt skips untracked tooling dirs like .claude/.
 GO_FILES := $(shell git ls-files '*.go' 2>/dev/null)
 
-.PHONY: help build install test race lint fmt update-pricing
+.PHONY: help build install test race fmt fmt-check vet lint ci update-pricing
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -24,12 +24,21 @@ test: ## Run all tests
 race: ## Run all tests with the race detector
 	go test -race ./...
 
-lint: ## gofmt check + go vet
-	@gofmt -l $(GO_FILES) | (grep . && echo "gofmt needed (run 'make fmt')" && exit 1) || true
+fmt-check: ## Fail if any tracked Go file needs formatting
+	@bad=$$(gofmt -l $(GO_FILES)); \
+	if [ -n "$$bad" ]; then echo "$$bad"; echo "gofmt needed (run 'make fmt')"; exit 1; fi
+
+vet: ## Run go vet
 	go vet ./...
+
+lint: ## Run golangci-lint (advisory — not yet enforced in CI)
+	golangci-lint run
 
 fmt: ## Format all Go files
 	gofmt -w $(GO_FILES)
+
+ci: fmt-check vet build race ## Run the same checks as the ci workflow
+	-$(MAKE) lint
 
 update-pricing: ## Refresh the embedded LiteLLM pricing snapshot
 	./scripts/update-pricing.sh
