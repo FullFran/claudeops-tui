@@ -32,21 +32,10 @@ func (c *Collector) Watch(ctx context.Context) error {
 	defer tick.Stop()
 	dirty := map[string]bool{}
 
-	flush := func() {
-		if len(dirty) == 0 {
-			return
-		}
-		offsets, _ := c.loadOffsets()
-		for p := range dirty {
-			_ = c.ingestFile(ctx, p, offsets[p])
-		}
-		dirty = map[string]bool{}
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
-			flush()
+			c.drainOnShutdown(ctx, dirty)
 			return ctx.Err()
 		case ev, ok := <-w.Events:
 			if !ok {
@@ -56,13 +45,40 @@ func (c *Collector) Watch(ctx context.Context) error {
 				if filepath.Ext(ev.Name) == ".jsonl" {
 					dirty[ev.Name] = true
 				} else if isDir(ev.Name) {
-					_ = w.Add(ev.Name)
+					// Watch the new tree and pick up files written into it
+					// before the watch was in place.
+					_ = addDirsRecursively(w, ev.Name)
+					for _, p := range jsonlFilesUnder(ev.Name) {
+						dirty[p] = true
+					}
 				}
 			}
 		case <-w.Errors:
 			// keep going
 		case <-tick.C:
-			flush()
+			c.flushDirty(ctx, dirty)
+			dirty = map[string]bool{}
 		}
 	}
+}
+
+// flushDirty ingests every file marked dirty since the last flush.
+func (c *Collector) flushDirty(ctx context.Context, dirty map[string]bool) {
+	if len(dirty) == 0 {
+		return
+	}
+	offsets, _ := c.loadOffsets()
+	for p := range dirty {
+		if err := c.ingestFile(ctx, p, offsets[p]); err != nil && ctx.Err() == nil {
+			c.fileErrors.Add(1)
+		}
+	}
+}
+
+// drainOnShutdown runs the last flush on a fresh bounded context: the caller's
+// ctx is already cancelled, so reusing it would ingest nothing.
+func (c *Collector) drainOnShutdown(ctx context.Context, dirty map[string]bool) {
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	c.flushDirty(dctx, dirty)
 }

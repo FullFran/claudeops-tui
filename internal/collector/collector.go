@@ -50,6 +50,7 @@ type Collector struct {
 	unknown     atomic.Int64
 	ingested    atomic.Int64
 	emitErrors  atomic.Int64
+	fileErrors  atomic.Int64
 
 	mu       sync.Mutex
 	watching map[string]bool // file path → true
@@ -105,6 +106,10 @@ func (c *Collector) UnknownCount() int64 { return c.unknown.Load() }
 // EmitErrorCount returns the number of events whose write to the sink failed.
 func (c *Collector) EmitErrorCount() int64 { return c.emitErrors.Load() }
 
+// FileErrorCount returns the number of files skipped because they could not be
+// read. They are retried on the next pass.
+func (c *Collector) FileErrorCount() int64 { return c.fileErrors.Load() }
+
 // IngestExisting walks `root` once and ingests every JSONL file found,
 // honoring persisted offsets so it can be called repeatedly.
 func (c *Collector) IngestExisting(ctx context.Context) error {
@@ -120,7 +125,12 @@ func (c *Collector) IngestExisting(ctx context.Context) error {
 			return nil
 		}
 		if err := c.ingestFile(ctx, path, offsets[path]); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return err
+			}
+			// A single unreadable file must not abort the walk — it keeps its
+			// offset and is retried on the next pass.
+			c.fileErrors.Add(1)
 		}
 		return nil
 	})
