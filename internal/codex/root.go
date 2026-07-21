@@ -6,12 +6,11 @@ import (
 )
 
 // CodexRoot returns the directory where Codex CLI writes session rollout files.
-// Resolution order:
-//  1. CODEX_HOME environment variable (if non-empty)
-//  2. ~/.codex/sessions (conventional default)
+// CODEX_HOME points at the Codex home directory (default ~/.codex); rollouts
+// always live in its `sessions` subdirectory.
 func CodexRoot() string {
 	if v := os.Getenv("CODEX_HOME"); v != "" {
-		return v
+		return filepath.Join(v, "sessions")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
