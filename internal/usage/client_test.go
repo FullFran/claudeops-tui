@@ -3,11 +3,13 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -287,6 +289,193 @@ func TestRateLimitNegativeCache(t *testing.T) {
 	c.mu.Unlock()
 	if remaining < 110*time.Second || remaining > 121*time.Second {
 		t.Errorf("Retry-After window: got %s, want ~120s", remaining)
+	}
+}
+
+func TestRefreshFailureClassification(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        int
+		retryAfter    string
+		wantExpired   bool
+		wantBackoff   time.Duration
+		wantInMessage string
+	}{
+		{name: "400 means the grant is dead", status: http.StatusBadRequest, wantExpired: true},
+		{name: "401 means the grant is dead", status: http.StatusUnauthorized, wantExpired: true},
+		{name: "403 means the grant is dead", status: http.StatusForbidden, wantExpired: true},
+		{
+			name: "429 is temporary and honors Retry-After", status: http.StatusTooManyRequests,
+			retryAfter: "90", wantBackoff: 90 * time.Second, wantInMessage: "rate-limited (HTTP 429)",
+		},
+		{
+			name: "503 is temporary and reports the real status", status: http.StatusServiceUnavailable,
+			wantBackoff: 5 * time.Minute, wantInMessage: "unavailable (HTTP 503)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			credsPath := writeCreds(t, dir, validCreds(time.Now().Add(-time.Hour)))
+
+			var refreshCalls atomic.Int64
+			refreshSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				refreshCalls.Add(1)
+				if tt.retryAfter != "" {
+					w.Header().Set("Retry-After", tt.retryAfter)
+				}
+				http.Error(w, "nope", tt.status)
+			}))
+			defer refreshSrv.Close()
+
+			c := New(credsPath)
+			c.UsageURL = refreshSrv.URL
+			c.RefreshURL = refreshSrv.URL
+
+			_, err := c.Get(context.Background())
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := errors.Is(err, ErrAuthExpired); got != tt.wantExpired {
+				t.Errorf("errors.Is(err, ErrAuthExpired) = %v, want %v (err=%v)", got, tt.wantExpired, err)
+			}
+			if tt.wantExpired {
+				return
+			}
+			if !contains(err.Error(), tt.wantInMessage) {
+				t.Errorf("error %q does not mention %q", err, tt.wantInMessage)
+			}
+			// The failure must be negative-cached: no second POST to the
+			// token endpoint until the backoff window elapses.
+			for i := 0; i < 3; i++ {
+				if _, err := c.Get(context.Background()); err == nil {
+					t.Fatal("expected the cached backoff error")
+				}
+			}
+			if refreshCalls.Load() != 1 {
+				t.Errorf("token endpoint hit %d times, want 1", refreshCalls.Load())
+			}
+			c.mu.Lock()
+			remaining := time.Until(c.cachedErrUntil)
+			c.mu.Unlock()
+			if remaining < tt.wantBackoff-10*time.Second || remaining > tt.wantBackoff {
+				t.Errorf("backoff window = %s, want ~%s", remaining, tt.wantBackoff)
+			}
+		})
+	}
+}
+
+// failingTransport counts attempts and always fails at the transport layer,
+// simulating a DNS or TLS failure.
+type failingTransport struct{ calls atomic.Int64 }
+
+func (f *failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	f.calls.Add(1)
+	return nil, errors.New("dial tcp: no such host")
+}
+
+func TestTransportErrorIsBackedOff(t *testing.T) {
+	dir := t.TempDir()
+	credsPath := writeCreds(t, dir, validCreds(time.Now().Add(time.Hour)))
+
+	tr := &failingTransport{}
+	c := New(credsPath)
+	c.HTTP = &http.Client{Transport: tr}
+
+	for i := 0; i < 4; i++ {
+		if _, err := c.Get(context.Background()); err == nil {
+			t.Fatalf("call %d: expected an error", i)
+		}
+	}
+	if tr.calls.Load() != 1 {
+		t.Errorf("transport attempted %d times, want 1 (backoff should suppress retries)", tr.calls.Load())
+	}
+}
+
+func TestGetIsSingleFlight(t *testing.T) {
+	dir := t.TempDir()
+	credsPath := writeCreds(t, dir, validCreds(time.Now().Add(-time.Hour)))
+
+	var usageCalls, refreshCalls atomic.Int64
+	usageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		usageCalls.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"five_hour": map[string]any{"utilization": 4.0, "resets_at": "2026-04-08T18:59:59Z"},
+		})
+	}))
+	defer usageSrv.Close()
+	refreshSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshCalls.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "new", "refresh_token": "rt2", "expires_in": 3600,
+		})
+	}))
+	defer refreshSrv.Close()
+
+	c := New(credsPath)
+	c.UsageURL = usageSrv.URL
+	c.RefreshURL = refreshSrv.URL
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Get(context.Background()); err != nil {
+				t.Errorf("Get: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if refreshCalls.Load() != 1 {
+		t.Errorf("token endpoint hit %d times, want 1", refreshCalls.Load())
+	}
+	if usageCalls.Load() != 1 {
+		t.Errorf("usage endpoint hit %d times, want 1", usageCalls.Load())
+	}
+}
+
+func TestRefreshPersistenceFailureIsLoud(t *testing.T) {
+	dir := t.TempDir()
+	credsPath := writeCreds(t, dir, validCreds(time.Now().Add(-time.Hour)))
+
+	usageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"five_hour": map[string]any{"utilization": 4.0, "resets_at": "2026-04-08T18:59:59Z"},
+		})
+	}))
+	defer usageSrv.Close()
+	refreshSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "new", "refresh_token": "rt2", "expires_in": 3600,
+		})
+	}))
+	defer refreshSrv.Close()
+
+	c := New(credsPath)
+	c.UsageURL = usageSrv.URL
+	c.RefreshURL = refreshSrv.URL
+
+	// A read-only directory still allows reading the credentials and taking
+	// the (pre-created) lock, but makes the atomic temp+rename save fail.
+	if err := os.WriteFile(credsPath+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	_, err := c.Get(context.Background())
+	if !errors.Is(err, ErrCredentialsNotPersisted) {
+		t.Fatalf("err = %v, want ErrCredentialsNotPersisted", err)
+	}
+	if !contains(err.Error(), credsPath) {
+		t.Errorf("error %q does not name the credentials file", err)
 	}
 }
 

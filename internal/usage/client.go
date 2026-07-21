@@ -29,6 +29,10 @@ var ErrUsageUnavailable = errors.New("usage endpoint unavailable (no OAuth)")
 // ErrAuthExpired indicates refresh failed and the user must re-login.
 var ErrAuthExpired = errors.New("oauth refresh failed; run `claude /login`")
 
+// ErrCredentialsNotPersisted indicates a rotated token could not be written
+// back to the shared credentials file, so it is lost once this process exits.
+var ErrCredentialsNotPersisted = errors.New("refreshed oauth tokens could not be saved")
+
 // Bucket is one quota window. Anthropic returns null for buckets that do
 // not apply to the current plan, so callers must check for nil.
 type Bucket struct {
@@ -91,20 +95,52 @@ type Client struct {
 	// with Claude Code itself, so the safest default is conservative.
 	DefaultBackoff time.Duration
 
+	// flight serializes the whole fetch/refresh path so N concurrent callers
+	// (the TUI dispatches refreshCmd on every 2s tick) cause one refresh.
+	flight sync.Mutex
+
 	mu             sync.Mutex
 	cached         *Snapshot
 	cachedErr      error
 	cachedErrUntil time.Time
 }
 
-// ErrRateLimited is returned while the negative cache window is active.
-// Wraps a message with the remaining backoff so the TUI can show it.
-type rateLimitedError struct {
+// backoffError is returned while the negative cache window is active. It names
+// the endpoint that failed and the real status (0 for transport failures) so
+// the TUI never tells the user to re-login over a transient outage.
+type backoffError struct {
+	endpoint   string
+	status     int
+	cause      error
 	retryAfter time.Duration
 }
 
-func (e *rateLimitedError) Error() string {
-	return fmt.Sprintf("usage endpoint rate-limited (HTTP 429); retrying in %s", e.retryAfter.Round(time.Second))
+func (e *backoffError) Error() string {
+	var what string
+	switch {
+	case e.status == http.StatusTooManyRequests:
+		what = fmt.Sprintf("rate-limited (HTTP %d)", e.status)
+	case e.status > 0:
+		what = fmt.Sprintf("unavailable (HTTP %d)", e.status)
+	default:
+		what = fmt.Sprintf("unreachable (%v)", e.cause)
+	}
+	return fmt.Sprintf("%s %s; retrying in %s", e.endpoint, what, e.retryAfter.Round(time.Second))
+}
+
+func (e *backoffError) Unwrap() error { return e.cause }
+
+// backoff negative-caches err for its retry window and returns it, so every
+// caller in the window gets the same answer without touching the network.
+func (c *Client) backoff(err *backoffError) error {
+	if err.retryAfter <= 0 {
+		err.retryAfter = c.DefaultBackoff
+	}
+	c.mu.Lock()
+	c.cachedErr = err
+	c.cachedErrUntil = time.Now().Add(err.retryAfter)
+	c.mu.Unlock()
+	return err
 }
 
 // New builds a Client with sensible defaults. Pass the path to
@@ -121,24 +157,20 @@ func New(credsPath string) *Client {
 	}
 }
 
-// Get returns the latest snapshot, using a 60s cache. Refreshes the OAuth
-// token if expired or on a 401 response.
+// Get returns the latest snapshot, using the CacheTTL cache. Refreshes the
+// OAuth token if expired or on a 401 response. Concurrent calls are
+// single-flighted: the losers return whatever the winner cached.
 func (c *Client) Get(ctx context.Context) (Snapshot, error) {
-	c.mu.Lock()
-	if c.cached != nil && time.Since(c.cached.FetchedAt) < c.CacheTTL {
-		s := *c.cached
-		c.mu.Unlock()
-		return s, nil
+	if snap, err, ok := c.cachedResult(); ok {
+		return snap, err
 	}
-	// Negative cache: if a recent call hit 429/5xx, do not retry until the
-	// backoff window has elapsed. This prevents us from compounding the
-	// rate-limit (Anthropic's endpoint is shared with Claude Code itself).
-	if c.cachedErr != nil && time.Now().Before(c.cachedErrUntil) {
-		err := c.cachedErr
-		c.mu.Unlock()
-		return Snapshot{}, err
+	c.flight.Lock()
+	defer c.flight.Unlock()
+	// Re-check: a concurrent caller may have populated the cache while we
+	// waited for the single-flight guard.
+	if snap, err, ok := c.cachedResult(); ok {
+		return snap, err
 	}
-	c.mu.Unlock()
 
 	creds, err := c.credentials(ctx, "")
 	if errors.Is(err, ErrNoOAuth) {
@@ -150,7 +182,7 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 
 	snap, status, retryAfter, err := c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, c.backoff(&backoffError{endpoint: "usage endpoint", cause: err})
 	}
 	if status == http.StatusUnauthorized {
 		// Retry once with a token refreshed under the file lock; another
@@ -162,22 +194,15 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 		}
 		snap, status, retryAfter, err = c.fetch(ctx, creds.ClaudeAiOauth.AccessToken)
 		if err != nil {
-			return Snapshot{}, err
+			return Snapshot{}, c.backoff(&backoffError{endpoint: "usage endpoint", cause: err})
 		}
 	}
 	if status == http.StatusTooManyRequests || status >= 500 {
 		// Negative-cache the failure so we stop hammering the endpoint.
 		// Honor Retry-After when present; fall back to DefaultBackoff.
-		backoff := retryAfter
-		if backoff <= 0 {
-			backoff = c.DefaultBackoff
-		}
-		rerr := &rateLimitedError{retryAfter: backoff}
-		c.mu.Lock()
-		c.cachedErr = rerr
-		c.cachedErrUntil = time.Now().Add(backoff)
-		c.mu.Unlock()
-		return Snapshot{}, rerr
+		return Snapshot{}, c.backoff(&backoffError{
+			endpoint: "usage endpoint", status: status, retryAfter: retryAfter,
+		})
 	}
 	if status >= 400 {
 		return Snapshot{}, fmt.Errorf("usage endpoint returned HTTP %d", status)
@@ -191,6 +216,23 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 	c.cachedErrUntil = time.Time{}
 	c.mu.Unlock()
 	return snap, nil
+}
+
+// cachedResult reports the cached snapshot, or the negative-cached failure
+// while its backoff window is still open.
+func (c *Client) cachedResult() (Snapshot, error, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cached != nil && time.Since(c.cached.FetchedAt) < c.CacheTTL {
+		return *c.cached, nil, true
+	}
+	// If a recent call hit 429/5xx or a transport failure, do not retry until
+	// the backoff window has elapsed. This prevents us from compounding the
+	// rate-limit (Anthropic's endpoint is shared with Claude Code itself).
+	if c.cachedErr != nil && time.Now().Before(c.cachedErrUntil) {
+		return Snapshot{}, c.cachedErr, true
+	}
+	return Snapshot{}, nil, false
 }
 
 // refreshSkew is how early we proactively refresh before the token expires.
@@ -290,12 +332,23 @@ func (c *Client) refresh(ctx context.Context, creds *Credentials) error {
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return err
+		return c.backoff(&backoffError{endpoint: "token endpoint", cause: err})
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return ErrAuthExpired
+		// Only the OAuth error statuses mean the grant is really gone;
+		// everything else is transient and must be backed off instead of
+		// telling the user to re-login.
+		switch resp.StatusCode {
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+			return ErrAuthExpired
+		}
+		return c.backoff(&backoffError{
+			endpoint:   "token endpoint",
+			status:     resp.StatusCode,
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		})
 	}
 	var r refreshResp
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
@@ -312,7 +365,11 @@ func (c *Client) refresh(ctx context.Context, creds *Credentials) error {
 		creds.ClaudeAiOauth.SetExpiresAt(time.Now().Add(time.Duration(r.ExpiresIn) * time.Second))
 	}
 	if err := SaveCredentials(c.CredsPath, creds); err != nil {
-		return err
+		// The server has already rotated the grant, so the tokens we just
+		// received are the only valid ones and we could not persist them.
+		// Say so loudly: the user may have to re-login.
+		return fmt.Errorf("%w: %s (%v); run `claude /login` if Claude Code stops working",
+			ErrCredentialsNotPersisted, c.CredsPath, err)
 	}
 	return nil
 }
