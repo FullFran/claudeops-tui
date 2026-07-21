@@ -463,3 +463,34 @@ func (u Updater) withRunner(r Runner) Updater {
 	u.Runner = r
 	return u
 }
+
+func TestSemverLT(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"lower patch", "0.7.0", "0.7.1", true},
+		{"lower minor", "0.6.9", "0.7.0", true},
+		{"lower major", "0.9.9", "1.0.0", true},
+		{"equal is not less", "0.7.0", "0.7.0", false},
+		{"higher patch", "0.7.1", "0.7.0", false},
+		{"v prefix tolerated", "v0.7.0", "v0.7.1", true},
+		{"prerelease keeps base precedence", "0.7.0-rc1", "0.7.1", true},
+		// A version string that cannot be parsed must never be reported as
+		// older: Sscanf leaves 0.0.0 behind, which would make any real
+		// version look newer and fabricate a stale-proxy failure.
+		{"unparseable a is not older", "dev", "0.7.0", false},
+		{"unparseable b is not newer", "0.7.0", "dev", false},
+		{"both unparseable", "dev", "dev", false},
+		{"truncated a is not older", "0.7", "0.7.0", false},
+		{"empty a is not older", "", "0.7.0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := semverLT(tt.a, tt.b); got != tt.want {
+				t.Errorf("semverLT(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
