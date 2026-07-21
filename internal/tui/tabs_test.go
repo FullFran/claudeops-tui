@@ -50,6 +50,19 @@ func TestVisibleTabsHonorsSettings(t *testing.T) {
 	}
 }
 
+func TestClassroomTabHonorsItsToggle(t *testing.T) {
+	s := config.DefaultSettings()
+	s.Tabs.Classroom = false
+	if tabVisible(TabClassroom, s) {
+		t.Error("classroom must be hidden when its toggle is off")
+	}
+	for _, tab := range visibleTabs(s) {
+		if tab == TabClassroom {
+			t.Error("hidden classroom must be absent from visibleTabs")
+		}
+	}
+}
+
 func TestSettingsTabIsNeverHidden(t *testing.T) {
 	s := config.DefaultSettings()
 	s.Tabs = config.TabSettings{}

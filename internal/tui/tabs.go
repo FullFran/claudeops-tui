@@ -56,8 +56,8 @@ var allTabs = []Tab{
 }
 
 // tabVisible reports whether a tab is enabled by the [tabs] settings.
-// Dashboard, Classroom and Settings are always visible: Dashboard is the
-// landing tab and Settings is the only place to turn the others back on.
+// Dashboard and Settings are always visible: Dashboard is the landing tab and
+// Settings is the only place to turn the others back on.
 func tabVisible(t Tab, s config.Settings) bool {
 	switch t {
 	case TabSessions:
@@ -70,6 +70,8 @@ func tabVisible(t Tab, s config.Settings) bool {
 		return s.Tabs.Tasks
 	case TabInsights:
 		return s.Tabs.Insights
+	case TabClassroom:
+		return s.Tabs.Classroom
 	}
 	return true
 }

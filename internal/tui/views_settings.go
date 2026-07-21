@@ -111,6 +111,9 @@ func settingsItems() []settingsItem {
 		{label: "Insights", desc: "actionable usage observations",
 			get:    func(s config.Settings) bool { return s.Tabs.Insights },
 			toggle: func(s *config.Settings) { s.Tabs.Insights = !s.Tabs.Insights }},
+		{label: "Classroom", desc: "live Claude Code sessions",
+			get:    func(s config.Settings) bool { return s.Tabs.Classroom },
+			toggle: func(s *config.Settings) { s.Tabs.Classroom = !s.Tabs.Classroom }},
 
 		// ── Insights Cards ───────────────────────────────────────────────────
 		{section: true, label: "Insights Cards"},
