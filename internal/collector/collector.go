@@ -163,7 +163,7 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 	if err != nil {
 		return nil // file may have rotated; ignore
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if stat, err := f.Stat(); err == nil && start > stat.Size() {
 		// Truncation, rotation or an editor atomic save left the stored offset
 		// past EOF; re-read from the beginning (uuid dedup makes that safe).

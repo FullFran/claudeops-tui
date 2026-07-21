@@ -258,7 +258,7 @@ func writeWithHeader(path string, s Settings) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	header := `# claudeops configuration
 # This file is managed by claudeops but safe to edit by hand.

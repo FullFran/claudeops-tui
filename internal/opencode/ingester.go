@@ -99,7 +99,7 @@ func (ing *Ingester) poll(ctx context.Context) error {
 	if err != nil {
 		return ing.setErr(fmt.Errorf("opencode: open db: %w", err))
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	pos, err := ing.wm.LoadSourceWatermark("opencode")
 	if err != nil {
@@ -131,7 +131,7 @@ func (ing *Ingester) poll(ctx context.Context) error {
 	if err != nil {
 		return ing.setErr(fmt.Errorf("opencode: query messages: %w", err))
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	maxTC := watermark
 	var emitErr error

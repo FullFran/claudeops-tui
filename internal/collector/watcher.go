@@ -18,7 +18,7 @@ func (c *Collector) Watch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	if err := addDirsRecursively(w, c.root); err != nil {
 		return err
