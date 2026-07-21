@@ -20,7 +20,7 @@ func withFileLock(path string, fn func() error) error {
 	if err != nil {
 		return fmt.Errorf("open credentials lock %s: %w", lockPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if err := lockExclusive(f); err != nil {
 		return fmt.Errorf("lock %s: %w", lockPath, err)
