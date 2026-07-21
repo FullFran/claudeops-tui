@@ -351,20 +351,21 @@ func cmdTUI() error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// A dead watcher or a write that never succeeds otherwise looks exactly
+	// like an idle machine, so both are recorded and reported on the way out.
+	var health collectorHealth
 	for _, nc := range cols {
 		nc := nc // capture
-		go func() {
-			// Best-effort: cold ingest, then watch.
-			_ = nc.col.Watch(ctx)
-		}()
+		go superviseWatch(ctx, nc.name, nc.col.Watch, &health)
+		go superviseEmitErrors(ctx, nc.name, nc.col, &health, stallInterval)
 	}
 	if ocIng != nil {
-		go func() {
-			_ = ocIng.Watch(ctx)
-		}()
+		go superviseWatch(ctx, ocIng.Name().String(), ocIng.Watch, &health)
 	}
 
 	_, err = prog.Run()
+	// Only safe once Run has torn down the alternate screen.
+	health.writeTo(os.Stderr)
 	return err
 }
 
