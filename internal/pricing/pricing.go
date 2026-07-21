@@ -234,6 +234,8 @@ var nonBillableModels = map[string]bool{"<synthetic>": true}
 
 // Calculator is a thin wrapper that warns once per unknown model and
 // computes a per-event cost from a Table.
+// The table may be swapped at runtime via Reload, so every read of `t` goes
+// through mu.
 type Calculator struct {
 	t       *Table
 	mu      sync.Mutex
@@ -268,11 +270,12 @@ func (c *Calculator) CostForCacheTTL(model string, in, out, cacheRead, cacheCrea
 	if nonBillableModels[model] {
 		return nil
 	}
-	if _, exact := c.t.Models[model]; !exact && IsFreeModelID(model) {
+	models := c.table().Models
+	if _, exact := models[model]; !exact && IsFreeModelID(model) {
 		zero := 0.0
 		return &zero
 	}
-	mp, ok := lookupPrice(c.t.Models, model)
+	mp, ok := lookupPrice(models, model)
 	if !ok {
 		// Fall back to the embedded LiteLLM snapshot for models the editable
 		// table doesn't carry (the user's table always wins when present).
@@ -330,8 +333,34 @@ func lookupPrice(table map[string]ModelPrice, model string) (ModelPrice, bool) {
 	return ModelPrice{}, false
 }
 
+// Reload swaps in a freshly parsed table so price edits apply without a
+// restart. The missing-model memo is cleared, so a model that is still unpriced
+// warns once more against the new table.
+func (c *Calculator) Reload(t *Table) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+	c.missing = map[string]bool{}
+}
+
+// ReloadFrom loads `path` and swaps it in. The current table is kept on error.
+func (c *Calculator) ReloadFrom(path string) error {
+	t, err := Load(path)
+	if err != nil {
+		return err
+	}
+	c.Reload(t)
+	return nil
+}
+
+func (c *Calculator) table() *Table {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
 // Updated returns the table's updated date for the dashboard footer.
-func (c *Calculator) Updated() string { return c.t.Updated }
+func (c *Calculator) Updated() string { return c.table().Updated }
 
 func perMillion(tokens int64, pricePerMillion float64) float64 {
 	return float64(tokens) * pricePerMillion / 1_000_000.0
