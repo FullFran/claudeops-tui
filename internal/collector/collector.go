@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -180,6 +181,7 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 		}
 	}
 	br := bufio.NewReaderSize(f, 1<<20)
+	fileCtx := c.fileContext(path)
 	off := start
 	for {
 		select {
@@ -196,7 +198,7 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 			// unconsumed so the next pass re-reads the line whole.
 			break
 		}
-		if !c.handleLine(ctx, path, off, line) {
+		if !c.handleLine(ctx, fileCtx, off, line) {
 			// The sink refused an event for a reason that may clear up: hold
 			// the offset at this line so the next pass retries it.
 			break
@@ -217,7 +219,7 @@ func (c *Collector) ingestFile(ctx context.Context, path string, start int64) er
 // handleLine processes one newline-terminated line. It reports false when the
 // line could not be persisted for a reason that may clear up later, so the
 // caller keeps the offset at this line instead of skipping the event.
-func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64, line []byte) bool {
+func (c *Collector) handleLine(ctx context.Context, fileCtx source.LineContext, lineStart int64, line []byte) bool {
 	// strip trailing newline before parsing
 	for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
 		line = line[:len(line)-1]
@@ -228,10 +230,8 @@ func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64
 
 	// Source-seam path: use LineParser + Sink.
 	if c.lineParser != nil && c.sink != nil {
-		lctx := source.LineContext{
-			Path:       path,
-			LineOffset: lineStart,
-		}
+		lctx := fileCtx
+		lctx.LineOffset = lineStart
 		records, err := c.lineParser.ParseLine(line, lctx)
 		if err != nil {
 			c.parseErrors.Add(1)
@@ -271,6 +271,34 @@ func (c *Collector) handleLine(ctx context.Context, path string, lineStart int64
 		return c.persistUser(ctx, e)
 	}
 	return true
+}
+
+// fileContext derives the per-file identity a source parser needs to synthesize
+// stable ids. Sources like Codex carry no session id inside their events, so it
+// comes from the file name; leaving it empty collapses every file onto one
+// session and makes equal byte offsets collide on the same uuid.
+func (c *Collector) fileContext(path string) source.LineContext {
+	sessionUUID := sessionUUIDFromPath(path)
+	lc := source.LineContext{Path: path, SessionUUID: sessionUUID}
+	if c.sourceName != "" && c.sourceName != source.Claude {
+		// Claude carries cwd per event; other sources fall back to a stable
+		// per-session project key.
+		lc.DefaultCWD = string(c.sourceName) + ":" + sessionUUID
+	}
+	return lc
+}
+
+// sessionUUIDFromPath extracts the session identity from a file name:
+// "rollout-<timestamp>-<uuid>.jsonl" yields <uuid>, anything else yields the
+// name without its extension.
+func sessionUUIDFromPath(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if rest, ok := strings.CutPrefix(name, "rollout-"); ok {
+		if _, uuid, found := strings.Cut(rest, "-"); found && uuid != "" {
+			return uuid
+		}
+	}
+	return name
 }
 
 // isPermanentReject reports whether a record can never be stored, however many
