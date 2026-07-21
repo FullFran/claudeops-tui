@@ -138,6 +138,15 @@ func (s *Store) Insert(ctx context.Context, ev Event, costEUR *float64, taskID *
 	if ev.UUID == "" || ev.SessionID == "" || ev.CWD == "" {
 		return errors.New("store.Insert: uuid, session_id and cwd are required")
 	}
+	ts := ev.TS.UTC()
+	tsStr := ts.Format(time.RFC3339Nano)
+	noop, err := s.insertIsNoop(ctx, ev.UUID, ev.OutTokens, ts)
+	if err != nil {
+		return err
+	}
+	if noop {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -148,7 +157,8 @@ func (s *Store) Insert(ctx context.Context, ev Event, costEUR *float64, taskID *
 	projectName := projectNameFromCWD(ev.CWD)
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO projects (cwd, name) VALUES (?, ?)
-		 ON CONFLICT(cwd) DO UPDATE SET name=excluded.name`,
+		 ON CONFLICT(cwd) DO UPDATE SET name=excluded.name
+		 WHERE projects.name IS NOT excluded.name`,
 		ev.CWD, projectName); err != nil {
 		return err
 	}
@@ -158,16 +168,43 @@ func (s *Store) Insert(ctx context.Context, ev Event, costEUR *float64, taskID *
 	}
 
 	// upsert session
-	tsStr := ev.TS.UTC().Format(time.RFC3339Nano)
 	sessionSource := ev.Source
 	if sessionSource == "" {
 		sessionSource = "claude"
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO sessions (id, project_id, first_seen, last_seen, source) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen`,
-		ev.SessionID, projectID, tsStr, tsStr, sessionSource); err != nil {
+	var firstSeen, lastSeen string
+	err = tx.QueryRowContext(ctx, `SELECT first_seen, last_seen FROM sessions WHERE id = ?`, ev.SessionID).Scan(&firstSeen, &lastSeen)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO sessions (id, project_id, first_seen, last_seen, source) VALUES (?, ?, ?, ?, ?)`,
+			ev.SessionID, projectID, tsStr, tsStr, sessionSource); err != nil {
+			return err
+		}
+	case err != nil:
 		return err
+	default:
+		storedFirstSeen, err := time.Parse(time.RFC3339Nano, firstSeen)
+		if err != nil {
+			return fmt.Errorf("parse session first_seen: %w", err)
+		}
+		storedLastSeen, err := time.Parse(time.RFC3339Nano, lastSeen)
+		if err != nil {
+			return fmt.Errorf("parse session last_seen: %w", err)
+		}
+		newFirstSeen, newLastSeen := storedFirstSeen, storedLastSeen
+		if ts.Before(newFirstSeen) {
+			newFirstSeen = ts
+		}
+		if ts.After(newLastSeen) {
+			newLastSeen = ts
+		}
+		if !newFirstSeen.Equal(storedFirstSeen) || !newLastSeen.Equal(storedLastSeen) {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET first_seen = ?, last_seen = ? WHERE id = ?`,
+				newFirstSeen.Format(time.RFC3339Nano), newLastSeen.Format(time.RFC3339Nano), ev.SessionID); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Resolve source: default to "claude" if not set, to preserve backward compat.
@@ -200,6 +237,34 @@ func (s *Store) Insert(ctx context.Context, ev Event, costEUR *float64, taskID *
 		return err
 	}
 	return tx.Commit()
+}
+
+// insertIsNoop detects a duplicate event which cannot change the session bounds.
+// Returning before opening a transaction avoids generating a WAL frame for
+// unchanged ingestion input.
+func (s *Store) insertIsNoop(ctx context.Context, uuid string, outTokens int64, ts time.Time) (bool, error) {
+	var storedOut int64
+	var firstSeen, lastSeen string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT events.out_tokens, sessions.first_seen, sessions.last_seen
+		 FROM events JOIN sessions ON sessions.id = events.session_id
+		 WHERE events.uuid = ?`, uuid,
+	).Scan(&storedOut, &firstSeen, &lastSeen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	storedFirstSeen, err := time.Parse(time.RFC3339Nano, firstSeen)
+	if err != nil {
+		return false, fmt.Errorf("parse session first_seen: %w", err)
+	}
+	storedLastSeen, err := time.Parse(time.RFC3339Nano, lastSeen)
+	if err != nil {
+		return false, fmt.Errorf("parse session last_seen: %w", err)
+	}
+	return outTokens <= storedOut && !ts.Before(storedFirstSeen) && !ts.After(storedLastSeen), nil
 }
 
 // ResetIngestedData clears everything derived from source files — events,
@@ -257,7 +322,9 @@ func (s *Store) LoadSourceWatermark(source string) (string, error) {
 func (s *Store) SaveOffset(path string, offset, size int64) error {
 	_, err := s.db.Exec(
 		`INSERT INTO file_offsets (path, offset, size) VALUES (?, ?, ?)
-		 ON CONFLICT(path) DO UPDATE SET offset=excluded.offset, size=excluded.size`,
+		 ON CONFLICT(path) DO UPDATE SET offset=excluded.offset, size=excluded.size
+		 WHERE file_offsets.offset IS NOT excluded.offset
+		    OR file_offsets.size IS NOT excluded.size`,
 		path, offset, size)
 	return err
 }

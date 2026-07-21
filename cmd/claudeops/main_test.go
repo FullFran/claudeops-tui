@@ -1,8 +1,50 @@
 package main
 
 import (
+	"io"
+	"os"
 	"testing"
 )
+
+func TestRunArgsVersionPrintsReleaseVersion(t *testing.T) {
+	got := captureStdout(t, func() error {
+		return runArgs([]string{"version"})
+	})
+	want := "claudeops " + version + "\n"
+	if got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+	if version == "" {
+		t.Fatal("version constant must not be empty")
+	}
+}
+
+func captureStdout(t *testing.T, run func() error) string {
+	t.Helper()
+	previous := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	t.Cleanup(func() {
+		os.Stdout = previous
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	if err := run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
+}
 
 func TestRunArgsDispatchesUpdateCommand(t *testing.T) {
 	called := false

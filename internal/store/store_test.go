@@ -87,6 +87,108 @@ func TestInsertIdempotentOnUUID(t *testing.T) {
 	}
 }
 
+func TestInsertIdenticalEventDoesNotWriteWAL(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	cost := 0.1
+	ev := makeEvent("dup-wal", "sess-wal", "/tmp/wal", "claude-opus-4-6", time.Now())
+	if err := s.Insert(ctx, ev, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+	checkpointWAL(t, s)
+
+	for range 3 {
+		if err := s.Insert(ctx, ev, &cost, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if frames := walFrames(t, s); frames != 0 {
+		t.Fatalf("identical Insert wrote %d WAL frames, want 0", frames)
+	}
+}
+
+func TestInsertSessionLastSeenIsMonotonic(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	cost := 0.1
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	first := makeEvent("first", "sess-monotonic", "/tmp/monotonic", "claude-opus-4-6", base)
+	if err := s.Insert(ctx, first, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	olderDuplicate := first
+	olderDuplicate.TS = base.Add(-time.Minute)
+	if err := s.Insert(ctx, olderDuplicate, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionLastSeen(t, s, first.SessionID, base)
+
+	newerDuplicate := first
+	newerDuplicate.TS = base.Add(time.Minute)
+	if err := s.Insert(ctx, newerDuplicate, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionLastSeen(t, s, first.SessionID, newerDuplicate.TS)
+}
+
+func TestInsertSessionLastSeenAdvancesAcrossRFC3339NanoFractionBoundary(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	cost := 0.1
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	first := makeEvent("first-fraction", "sess-fraction", "/tmp/fraction", "claude-opus-4-6", base)
+	if err := s.Insert(ctx, first, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	later := first
+	later.TS = base.Add(100 * time.Millisecond)
+	if err := s.Insert(ctx, later, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionLastSeen(t, s, first.SessionID, later.TS)
+}
+
+func TestInsertMaintainsSessionBoundsAcrossOutOfOrderRFC3339NanoEvents(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	cost := 0.1
+	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	earliest := base.Add(time.Nanosecond)
+	middle := base.Add(500 * time.Millisecond)
+	latest := base.Add(time.Second - time.Nanosecond)
+
+	ev := makeEvent("bounds", "sess-bounds", "/tmp/bounds", "claude-opus-4-6", middle)
+	if err := s.Insert(ctx, ev, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	later := ev
+	later.TS = latest
+	if err := s.Insert(ctx, later, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	earlier := ev
+	earlier.TS = earliest
+	if err := s.Insert(ctx, earlier, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionBounds(t, s, ev.SessionID, earliest, latest)
+
+	checkpointWAL(t, s)
+	insideBounds := ev
+	insideBounds.TS = middle
+	if err := s.Insert(ctx, insideBounds, &cost, nil); err != nil {
+		t.Fatal(err)
+	}
+	if frames := walFrames(t, s); frames != 0 {
+		t.Fatalf("identical event inside session bounds wrote %d WAL frames, want 0", frames)
+	}
+	assertSessionBounds(t, s, ev.SessionID, earliest, latest)
+}
+
 // Claude Code writes one JSONL line per content block of an assistant message.
 // Those lines share input/cache token counts but output_tokens grows
 // monotonically (streaming partial → final). After dedup they collapse onto
@@ -233,6 +335,74 @@ func TestOffsetsRoundTrip(t *testing.T) {
 	if m["/c.jsonl"] != 7 {
 		t.Errorf("offset want 7 got %d", m["/c.jsonl"])
 	}
+}
+
+func TestSaveOffsetIdenticalValueDoesNotWriteWAL(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveOffset("/a/wal.jsonl", 100, 200); err != nil {
+		t.Fatal(err)
+	}
+	checkpointWAL(t, s)
+
+	if err := s.SaveOffset("/a/wal.jsonl", 100, 200); err != nil {
+		t.Fatal(err)
+	}
+	if frames := walFrames(t, s); frames != 0 {
+		t.Fatalf("identical SaveOffset wrote %d WAL frames, want 0", frames)
+	}
+}
+
+func assertSessionLastSeen(t *testing.T, s *Store, sessionID string, want time.Time) {
+	t.Helper()
+	var got string
+	if err := s.DB().QueryRow(`SELECT last_seen FROM sessions WHERE id = ?`, sessionID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if wantText := want.UTC().Format(time.RFC3339Nano); got != wantText {
+		t.Fatalf("last_seen = %q, want %q", got, wantText)
+	}
+}
+
+func assertSessionBounds(t *testing.T, s *Store, sessionID string, wantFirst, wantLast time.Time) {
+	t.Helper()
+	var firstSeen, lastSeen string
+	if err := s.DB().QueryRow(`SELECT first_seen, last_seen FROM sessions WHERE id = ?`, sessionID).Scan(&firstSeen, &lastSeen); err != nil {
+		t.Fatal(err)
+	}
+	gotFirst, err := time.Parse(time.RFC3339Nano, firstSeen)
+	if err != nil {
+		t.Fatalf("parse first_seen %q: %v", firstSeen, err)
+	}
+	gotLast, err := time.Parse(time.RFC3339Nano, lastSeen)
+	if err != nil {
+		t.Fatalf("parse last_seen %q: %v", lastSeen, err)
+	}
+	if !gotFirst.Equal(wantFirst) || !gotLast.Equal(wantLast) {
+		t.Fatalf("session bounds = [%s, %s], want [%s, %s]", gotFirst, gotLast, wantFirst, wantLast)
+	}
+}
+
+func checkpointWAL(t *testing.T, s *Store) {
+	t.Helper()
+	var busy, log, checkpointed int
+	if err := s.DB().QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &log, &checkpointed); err != nil {
+		t.Fatal(err)
+	}
+	if busy != 0 {
+		t.Fatalf("WAL checkpoint remained busy")
+	}
+}
+
+func walFrames(t *testing.T, s *Store) int {
+	t.Helper()
+	var busy, log, checkpointed int
+	if err := s.DB().QueryRow(`PRAGMA wal_checkpoint(PASSIVE)`).Scan(&busy, &log, &checkpointed); err != nil {
+		t.Fatal(err)
+	}
+	if busy != 0 {
+		t.Fatalf("WAL checkpoint remained busy")
+	}
+	return log
 }
 
 func TestAggregatesAndTopQueries(t *testing.T) {
