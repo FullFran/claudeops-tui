@@ -281,7 +281,7 @@ func (c *Client) refresh(ctx context.Context, creds *Credentials) error {
 		creds.ClaudeAiOauth.RefreshToken = r.RefreshToken
 	}
 	if r.ExpiresIn > 0 {
-		creds.ClaudeAiOauth.ExpiresAt = time.Now().Add(time.Duration(r.ExpiresIn) * time.Second).Unix()
+		creds.ClaudeAiOauth.SetExpiresAt(time.Now().Add(time.Duration(r.ExpiresIn) * time.Second))
 	}
 	if err := SaveCredentials(c.CredsPath, creds); err != nil {
 		return err

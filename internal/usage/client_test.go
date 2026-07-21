@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,6 +138,64 @@ func TestRefreshOn401(t *testing.T) {
 	}
 	if c2.ClaudeAiOauth.AccessToken != "sk-ant-oat01-new" {
 		t.Errorf("token not refreshed on disk: %q", c2.ClaudeAiOauth.AccessToken)
+	}
+}
+
+func TestRefreshWritesExpiresAtInTheOnDiskUnit(t *testing.T) {
+	tests := []struct {
+		name     string
+		expiresA int64
+		wantMs   bool
+	}{
+		{name: "milliseconds file stays in milliseconds", expiresA: time.Now().Add(-time.Hour).UnixMilli(), wantMs: true},
+		{name: "seconds file stays in seconds", expiresA: time.Now().Add(-time.Hour).Unix(), wantMs: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			credsPath := filepath.Join(dir, ".credentials.json")
+			body := `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":` +
+				strconv.FormatInt(tt.expiresA, 10) + `}}`
+			if err := os.WriteFile(credsPath, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			usageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"five_hour": map[string]any{"utilization": 1.0, "resets_at": "2026-04-08T18:59:59Z"},
+				})
+			}))
+			defer usageSrv.Close()
+			refreshSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "new", "refresh_token": "rt2", "expires_in": 3600,
+				})
+			}))
+			defer refreshSrv.Close()
+
+			c := New(credsPath)
+			c.UsageURL = usageSrv.URL
+			c.RefreshURL = refreshSrv.URL
+			if _, err := c.Get(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := LoadCredentials(credsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ClaudeAiOauth.AccessToken != "new" {
+				t.Fatalf("proactive refresh did not fire: token = %q", got.ClaudeAiOauth.AccessToken)
+			}
+			if got.ClaudeAiOauth.Millis != tt.wantMs {
+				t.Errorf("expiresAt unit changed: millis = %v, want %v (raw %d)",
+					got.ClaudeAiOauth.Millis, tt.wantMs, got.ClaudeAiOauth.ExpiresAt)
+			}
+			if got.ClaudeAiOauth.ExpiresAtTime().Before(time.Now()) {
+				t.Errorf("expiresAt %s is already in the past", got.ClaudeAiOauth.ExpiresAtTime())
+			}
+		})
 	}
 }
 
