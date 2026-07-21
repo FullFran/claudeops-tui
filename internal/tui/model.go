@@ -561,6 +561,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.toggleSettingsItem()
 					m.refreshViewport()
 				}
+				// Handled: do not fall through to the viewport, which binds
+				// space to PageDown.
+				return m, nil
 			}
 		case "enter":
 			if m.activeTab == TabSettings {
@@ -616,6 +619,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sessCursor = 0
 				m.refreshViewport()
 			}
+			return m, nil
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
