@@ -185,7 +185,7 @@ func renderDayDetail(m Model) string {
 		for _, s := range d.Sessions {
 			id := truncate(s.SessionID, 10)
 			costStr := colorForSpend(s.CostEUR, th).Render(fmt.Sprintf("€%.4f", s.CostEUR))
-			sb.WriteString(fmt.Sprintf("  %-10s  %-26s  %s\n", id, truncate(s.ProjectName, 26), costStr))
+			fmt.Fprintf(&sb, "  %-10s  %-26s  %s\n", id, truncate(s.ProjectName, 26), costStr)
 		}
 	} else {
 		sb.WriteString(dimStyle.Render("  no sessions") + "\n")

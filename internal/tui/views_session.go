@@ -59,8 +59,8 @@ func renderSessionBrowse(m Model) string {
 				id, proj, s.Events, costStr)) + "\n")
 		} else {
 			costColored := colorForSpend(s.CostEUR, th).Render(costStr)
-			sb.WriteString(fmt.Sprintf("   %-18s  %-26s  %8d  %12s\n",
-				id, proj, s.Events, costColored))
+			fmt.Fprintf(&sb, "   %-18s  %-26s  %8d  %12s\n",
+				id, proj, s.Events, costColored)
 		}
 	}
 
@@ -139,7 +139,7 @@ func renderSessionDetail(m Model) string {
 			} else {
 				bar := hourlyBar(data.cost, maxH, 20)
 				costStr := colorForSpend(data.cost, th).Render(fmt.Sprintf("€%.4f", data.cost))
-				sb.WriteString(fmt.Sprintf("%s  %s  %s  %d ev\n", hourLabel, bar, costStr, data.events))
+				fmt.Fprintf(&sb, "%s  %s  %s  %d ev\n", hourLabel, bar, costStr, data.events)
 			}
 		}
 	} else {
@@ -157,7 +157,7 @@ func renderSessionDetail(m Model) string {
 			if d.Agg.CostEUR > 0 {
 				pct = dimStyle.Render(fmt.Sprintf("  (%.0f%%)", pm.CostEUR/d.Agg.CostEUR*100))
 			}
-			sb.WriteString(fmt.Sprintf("  %-32s  %s  %d ev%s\n", truncate(pm.Model, 32), costStr, pm.Events, pct))
+			fmt.Fprintf(&sb, "  %-32s  %s  %d ev%s\n", truncate(pm.Model, 32), costStr, pm.Events, pct)
 		}
 	} else {
 		sb.WriteString(dimStyle.Render("  no data") + "\n")
@@ -167,11 +167,11 @@ func renderSessionDetail(m Model) string {
 	// Token breakdown.
 	sb.WriteString("  " + headerStyle.Render("Token breakdown") + "\n")
 	sb.WriteString("  " + dimStyle.Render(strings.Repeat("─", 50)) + "\n")
-	sb.WriteString(fmt.Sprintf("  %-20s  %d\n", "Input tokens:", d.Agg.InTokens))
-	sb.WriteString(fmt.Sprintf("  %-20s  %d\n", "Output tokens:", d.Agg.OutTokens))
-	sb.WriteString(fmt.Sprintf("  %-20s  %d\n", "Cache read:", d.Agg.CacheReadTokens))
-	sb.WriteString(fmt.Sprintf("  %-20s  %d\n", "Cache create:", d.Agg.CacheCreateTokens))
-	sb.WriteString(fmt.Sprintf("  %-20s  %d\n", "Total:", totalTokens))
+	fmt.Fprintf(&sb, "  %-20s  %d\n", "Input tokens:", d.Agg.InTokens)
+	fmt.Fprintf(&sb, "  %-20s  %d\n", "Output tokens:", d.Agg.OutTokens)
+	fmt.Fprintf(&sb, "  %-20s  %d\n", "Cache read:", d.Agg.CacheReadTokens)
+	fmt.Fprintf(&sb, "  %-20s  %d\n", "Cache create:", d.Agg.CacheCreateTokens)
+	fmt.Fprintf(&sb, "  %-20s  %d\n", "Total:", totalTokens)
 	sb.WriteString("\n")
 
 	return sb.String()

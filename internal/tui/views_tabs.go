@@ -15,11 +15,11 @@ func renderSessionsTab(m Model) string {
 		sb.WriteString(dimStyle.Render("  no data") + "\n")
 		return sb.String()
 	}
-	sb.WriteString(fmt.Sprintf("  %-10s  %-30s  %12s\n", "SESSION", "PROJECT", "€"))
+	fmt.Fprintf(&sb, "  %-10s  %-30s  %12s\n", "SESSION", "PROJECT", "€")
 	sb.WriteString("  " + strings.Repeat("─", 58) + "\n")
 	for _, s := range m.AllSess {
 		id := truncate(s.SessionID, 10)
-		sb.WriteString(fmt.Sprintf("  %-10s  %-30s  %12.4f\n", id, truncate(s.ProjectName, 30), s.CostEUR))
+		fmt.Fprintf(&sb, "  %-10s  %-30s  %12.4f\n", id, truncate(s.ProjectName, 30), s.CostEUR)
 	}
 	return sb.String()
 }
@@ -33,10 +33,10 @@ func renderProjectsTab(m Model) string {
 		sb.WriteString(dimStyle.Render("  no data") + "\n")
 		return sb.String()
 	}
-	sb.WriteString(fmt.Sprintf("  %-40s  %12s\n", "PROJECT", "€ all-time"))
+	fmt.Fprintf(&sb, "  %-40s  %12s\n", "PROJECT", "€ all-time")
 	sb.WriteString("  " + strings.Repeat("─", 58) + "\n")
 	for _, p := range m.AllProj {
-		sb.WriteString(fmt.Sprintf("  %-40s  %12.4f\n", truncate(p.ProjectName, 40), p.CostEUR))
+		fmt.Fprintf(&sb, "  %-40s  %12.4f\n", truncate(p.ProjectName, 40), p.CostEUR)
 	}
 	return sb.String()
 }
@@ -49,13 +49,13 @@ func renderModelsTab(m Model) string {
 		sb.WriteString(dimStyle.Render("  no data") + "\n")
 		return sb.String()
 	}
-	sb.WriteString(fmt.Sprintf("  %-32s  %8s  %12s  %12s  %14s  %14s  %12s\n",
-		"MODEL", "EVENTS", "IN", "OUT", "CACHE_READ", "CACHE_CREATE", "€"))
+	fmt.Fprintf(&sb, "  %-32s  %8s  %12s  %12s  %14s  %14s  %12s\n",
+		"MODEL", "EVENTS", "IN", "OUT", "CACHE_READ", "CACHE_CREATE", "€")
 	sb.WriteString("  " + strings.Repeat("─", 116) + "\n")
 	for _, p := range m.PerModel {
-		sb.WriteString(fmt.Sprintf("  %-32s  %8d  %12d  %12d  %14d  %14d  %12.4f\n",
+		fmt.Fprintf(&sb, "  %-32s  %8d  %12d  %12d  %14d  %14d  %12.4f\n",
 			truncate(p.Model, 32), p.Events, p.InTokens, p.OutTokens,
-			p.CacheReadTokens, p.CacheCreateTokens, p.CostEUR))
+			p.CacheReadTokens, p.CacheCreateTokens, p.CostEUR)
 	}
 	return sb.String()
 }
@@ -69,8 +69,8 @@ func renderTasksTab(m Model) string {
 		sb.WriteString(dimStyle.Render("  no tasks yet — press `n` to start one (or use `claudeops task start \"name\"`)") + "\n")
 		return sb.String()
 	}
-	sb.WriteString(fmt.Sprintf("  %-30s  %-19s  %-12s  %8s  %12s\n",
-		"NAME", "STARTED", "DURATION", "EVENTS", "€"))
+	fmt.Fprintf(&sb, "  %-30s  %-19s  %-12s  %8s  %12s\n",
+		"NAME", "STARTED", "DURATION", "EVENTS", "€")
 	sb.WriteString("  " + strings.Repeat("─", 95) + "\n")
 	for _, t := range m.AllTasks {
 		dur := "—"
@@ -81,8 +81,8 @@ func renderTasksTab(m Model) string {
 		if !t.StartedAt.IsZero() {
 			dur = end.Sub(t.StartedAt).Truncate(time.Second).String()
 		}
-		sb.WriteString(fmt.Sprintf("  %-30s  %-19s  %-12s  %8d  %12.4f\n",
-			truncate(t.Name, 30), t.StartedAt.Format("2006-01-02 15:04:05"), dur, t.Events, t.CostEUR))
+		fmt.Fprintf(&sb, "  %-30s  %-19s  %-12s  %8d  %12.4f\n",
+			truncate(t.Name, 30), t.StartedAt.Format("2006-01-02 15:04:05"), dur, t.Events, t.CostEUR)
 	}
 	return sb.String()
 }

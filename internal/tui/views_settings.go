@@ -245,9 +245,9 @@ func renderSettingsTab(m Model) string {
 
 			if item.label == "Thresholds" {
 				th := m.Settings.Dashboard.Thresholds
-				sb.WriteString(fmt.Sprintf("  warning   %s    alert   %s\n",
+				fmt.Fprintf(&sb, "  warning   %s    alert   %s\n",
 					warnStyle.Render(fmt.Sprintf("€%.0f", th.DailyWarnEUR)),
-					errStyle.Render(fmt.Sprintf("€%.0f", th.DailyAlertEUR))))
+					errStyle.Render(fmt.Sprintf("€%.0f", th.DailyAlertEUR)))
 				sb.WriteString("  " + settingsDescStyle.Render("edit thresholds in ~/.claudeops/config.toml") + "\n")
 			}
 			continue
@@ -256,10 +256,10 @@ func renderSettingsTab(m Model) string {
 		// ── Skip (readonly display, non-selectable) ───────────────────────
 		if item.skip && item.readValue != nil {
 			val := item.readValue(m.Settings)
-			sb.WriteString(fmt.Sprintf("   %-20s %-14s  %s\n",
+			fmt.Fprintf(&sb, "   %-20s %-14s  %s\n",
 				item.label,
 				settingsReadonlyStyle.Render(val),
-				settingsDescStyle.Render(item.desc)))
+				settingsDescStyle.Render(item.desc))
 			continue
 		}
 
@@ -278,7 +278,7 @@ func renderSettingsTab(m Model) string {
 				line := fmt.Sprintf(" > %s  %-24s  %s", toggle, item.label, item.desc)
 				sb.WriteString(cursorLineMarker + settingsCursorStyle.Render(line) + "\n")
 			} else {
-				sb.WriteString(fmt.Sprintf("   %s  %-24s  %s\n", toggle, item.label, desc))
+				fmt.Fprintf(&sb, "   %s  %-24s  %s\n", toggle, item.label, desc)
 			}
 
 		// ── Editable string ───────────────────────────────────────────────
@@ -294,10 +294,10 @@ func renderSettingsTab(m Model) string {
 				line := fmt.Sprintf(" > %-20s %-28s  %s", item.label, val, item.desc)
 				sb.WriteString(cursorLineMarker + settingsCursorStyle.Render(line) + "\n")
 			} else {
-				sb.WriteString(fmt.Sprintf("   %-20s %-28s  %s\n",
+				fmt.Fprintf(&sb, "   %-20s %-28s  %s\n",
 					item.label,
 					settingsStringStyle.Render(val),
-					desc))
+					desc)
 			}
 
 		// ── Action ────────────────────────────────────────────────────────
@@ -307,10 +307,10 @@ func renderSettingsTab(m Model) string {
 				line := fmt.Sprintf(" > ► %-28s  %s", item.label, item.desc)
 				sb.WriteString(cursorLineMarker + settingsCursorStyle.Render(line) + "\n")
 			} else {
-				sb.WriteString(fmt.Sprintf("   %s %-28s  %s\n",
+				fmt.Fprintf(&sb, "   %s %-28s  %s\n",
 					settingsActionStyle.Render("►"),
 					item.label,
-					desc))
+					desc)
 			}
 		}
 	}
