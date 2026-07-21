@@ -133,7 +133,7 @@ func (ing *Ingester) poll(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	var maxTC int64 = watermark
+	maxTC := watermark
 	var emitErr error
 	for rows.Next() {
 		var msgID, sessionID, rawData, directory string

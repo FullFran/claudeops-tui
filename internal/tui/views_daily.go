@@ -92,8 +92,8 @@ func renderDayBrowse(m Model) string {
 				sb.WriteString(dimStyle.Render(fmt.Sprintf("   %-14s%s  %8d  %8d  %10s  %s",
 					dateLabel, todayTag, d.Events, d.Sessions, costStr, barStr)) + "\n")
 			} else {
-				sb.WriteString(fmt.Sprintf("   %-14s%s  %8d  %8d  %10s  %s\n",
-					dateLabel, todayTag, d.Events, d.Sessions, costColored, barStr))
+				fmt.Fprintf(&sb, "   %-14s%s  %8d  %8d  %10s  %s\n",
+					dateLabel, todayTag, d.Events, d.Sessions, costColored, barStr)
 			}
 		}
 	}
@@ -153,7 +153,7 @@ func renderDayDetail(m Model) string {
 			} else {
 				bar := hourlyBar(data.cost, maxH, 20)
 				costStr := colorForSpend(data.cost, th).Render(fmt.Sprintf("€%.4f", data.cost))
-				sb.WriteString(fmt.Sprintf("%s  %s  %s  %d ev\n", hourLabel, bar, costStr, data.events))
+				fmt.Fprintf(&sb, "%s  %s  %s  %d ev\n", hourLabel, bar, costStr, data.events)
 			}
 		}
 	} else {
@@ -171,7 +171,7 @@ func renderDayDetail(m Model) string {
 			if d.Agg.CostEUR > 0 {
 				pct = dimStyle.Render(fmt.Sprintf("  (%.0f%%)", pm.CostEUR/d.Agg.CostEUR*100))
 			}
-			sb.WriteString(fmt.Sprintf("  %-32s  %s  %d ev%s\n", truncate(pm.Model, 32), costStr, pm.Events, pct))
+			fmt.Fprintf(&sb, "  %-32s  %s  %d ev%s\n", truncate(pm.Model, 32), costStr, pm.Events, pct)
 		}
 	} else {
 		sb.WriteString(dimStyle.Render("  no data") + "\n")
