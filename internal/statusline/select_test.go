@@ -120,3 +120,49 @@ func TestClaudeNoteCarriesCredits(t *testing.T) {
 		t.Errorf("plain output dropped the credit balance:\n%s", got)
 	}
 }
+
+func TestPrefixOnlyWhenThereIsOutput(t *testing.T) {
+	// A label with no value reads as a broken bar, so an empty render must stay
+	// empty even when a prefix was asked for.
+	snap := usage.Snapshot{FiveHour: bucket(6, time.Hour)}
+
+	got, err := Render(snap, nil, Options{Prefix: "claudeops", Now: fixedNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "claudeops 5h 6%" {
+		t.Errorf("got %q want %q", got, "claudeops 5h 6%")
+	}
+
+	// Nothing to report: no prefix either.
+	got, err = Render(usage.Snapshot{}, nil, Options{Prefix: "claudeops", Now: fixedNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("got %q want empty", got)
+	}
+
+	// Same rule when the selected provider has no data.
+	got, err = Render(snap, nil, Options{Prefix: "claudeops", Provider: "codex", Now: fixedNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("got %q want empty for a provider with no data", got)
+	}
+}
+
+func TestPrefixInPlain(t *testing.T) {
+	snap := usage.Snapshot{FiveHour: bucket(6, time.Hour)}
+	got, err := Render(snap, nil, Options{Format: FormatPlain, Prefix: "claudeops", Now: fixedNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "claudeops\n") {
+		t.Errorf("plain output should lead with the prefix:\n%s", got)
+	}
+	if got, err = Render(usage.Snapshot{}, nil, Options{Format: FormatPlain, Prefix: "claudeops", Now: fixedNow}); err != nil || got != "" {
+		t.Errorf("empty plain output should carry no prefix, got %q", got)
+	}
+}

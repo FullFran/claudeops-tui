@@ -322,6 +322,14 @@ $ claudeops statusline --format json
 {"five_hour":{"utilization":6,...
 ```
 
+Add a label with `--prefix`. It is omitted when there is nothing to report, so
+you never get a heading with no value under it:
+
+```console
+$ claudeops statusline --prefix claudeops
+claudeops 5h 6% · 7d 29%
+```
+
 In tmux, with colour thresholds:
 
 ```tmux
@@ -388,6 +396,7 @@ expired.
 |---|---|---|
 | `--provider` | config, then `auto` | a provider name, `all`, or `auto` to follow the active pane |
 | `--labels` | off | prefix each group with its provider name |
+| `--prefix` | none | text before the output, emitted only when there is output |
 | `--format` | `compact` | `compact`, `plain` or `json` |
 | `--color` | off | wrap compact output in tmux colour escapes |
 | `--reset` | off | append time left in the 5h window |

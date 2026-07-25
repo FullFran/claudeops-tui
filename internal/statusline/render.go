@@ -44,6 +44,10 @@ type Options struct {
 	// ShowLabels prefixes each group with its provider name. Left off for a
 	// single source, where the prefix is noise.
 	ShowLabels bool
+	// Prefix is emitted before the first segment, and only when there is
+	// something to show. A status bar with a label but no value reads as
+	// broken, so an empty render stays empty.
+	Prefix string
 	// Color wraps compact output in tmux style escapes. Off by default so the
 	// output stays usable in bars that do not speak tmux formatting.
 	Color bool
@@ -224,11 +228,21 @@ func renderCompact(groups []Group, o Options) string {
 			parts = append(parts, strings.Join(segs, " · "))
 		}
 	}
-	return strings.Join(parts, " │ ")
+	if len(parts) == 0 {
+		return ""
+	}
+	out := strings.Join(parts, " │ ")
+	if o.Prefix != "" {
+		out = o.Prefix + " " + out
+	}
+	return out
 }
 
 func renderPlain(groups []Group, o Options) string {
 	var sb strings.Builder
+	if o.Prefix != "" && len(groups) > 0 {
+		fmt.Fprintf(&sb, "%s\n", o.Prefix)
+	}
 	for _, g := range groups {
 		if o.ShowLabels {
 			fmt.Fprintf(&sb, "%s\n", g.Provider)
