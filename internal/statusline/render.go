@@ -6,8 +6,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/usage"
 )
+
+// ProviderAll and ProviderAuto are the two non-literal values accepted wherever
+// a provider name is expected.
+const (
+	ProviderAll  = "all"
+	ProviderAuto = "auto"
+)
+
+// ClaudeProvider is the name of the Anthropic source. It does not come from the
+// provider registry — it has its own client — but it is selectable by the same
+// name so users do not have to care about that split.
+const ClaudeProvider = "claude"
 
 // Format selects the output shape.
 type Format string
@@ -24,6 +37,13 @@ const (
 // Options controls rendering.
 type Options struct {
 	Format Format
+	// Provider selects the source to show: a name, ProviderAll, or "" which
+	// behaves like ProviderAll. Resolution of ProviderAuto happens before this
+	// point, in the command, because it needs to inspect tmux.
+	Provider string
+	// ShowLabels prefixes each group with its provider name. Left off for a
+	// single source, where the prefix is noise.
+	ShowLabels bool
 	// Color wraps compact output in tmux style escapes. Off by default so the
 	// output stays usable in bars that do not speak tmux formatting.
 	Color bool
@@ -70,82 +90,161 @@ const (
 // Buckets the plan does not have come back nil from the API, so every one is
 // optional and a plan with no quota at all renders as an empty string rather
 // than a row of zeroes.
-func Render(snap usage.Snapshot, o Options) (string, error) {
+func Render(snap usage.Snapshot, providers []provider.Usage, o Options) (string, error) {
+	groups := selectGroups(snap, providers, o.Provider)
 	switch o.Format {
 	case FormatJSON:
-		b, err := json.Marshal(snap)
+		b, err := json.Marshal(groups)
 		if err != nil {
 			return "", err
 		}
 		return string(b), nil
 	case FormatPlain:
-		return renderPlain(snap, o), nil
+		return renderPlain(groups, o), nil
 	default:
-		return renderCompact(snap, o), nil
+		return renderCompact(groups, o), nil
 	}
 }
 
-func renderCompact(snap usage.Snapshot, o Options) string {
-	var parts []string
-	for _, b := range buckets(snap) {
-		seg := fmt.Sprintf("%s %.0f%%", b.Label, b.Bucket.Utilization)
-		if o.Color {
-			seg = fmt.Sprintf("#[fg=%s]%s%s", colourFor(b.Bucket.Utilization, o), seg, colourOff)
-		}
-		parts = append(parts, seg)
+// Group is one source's windows, ready to render.
+//
+// The JSON shape is declared here rather than reusing provider.Window so the
+// output stays snake_case and stable: this is a public interface for scripts,
+// and it should not shift because an internal struct gained a field.
+type Group struct {
+	Provider string   `json:"provider"`
+	Windows  []Window `json:"windows"`
+	Note     string   `json:"note,omitempty"`
+}
+
+// Window is one quota window in a Group.
+type Window struct {
+	Label       string    `json:"label"`
+	Utilization float64   `json:"utilization"`
+	ResetsAt    time.Time `json:"resets_at,omitzero"`
+}
+
+func toWindows(in []provider.Window) []Window {
+	out := make([]Window, 0, len(in))
+	for _, w := range in {
+		out = append(out, Window{Label: w.Label, Utilization: w.Utilization, ResetsAt: w.ResetsAt})
 	}
-	if o.Reset && snap.FiveHour != nil {
-		if left := snap.FiveHour.ResetsAt.Sub(o.now()); left > 0 {
-			parts = append(parts, "↻"+shortDuration(left))
+	return out
+}
+
+// selectGroups flattens both sources into a common shape and keeps only what
+// was asked for. An unknown name yields nothing, which renders as an empty
+// segment — the same outcome as a provider you have no credentials for, and
+// the right one for a status bar.
+func selectGroups(snap usage.Snapshot, providers []provider.Usage, want string) []Group {
+	want = strings.ToLower(strings.TrimSpace(want))
+	all := want == "" || want == ProviderAll
+
+	var groups []Group
+	if all || want == ClaudeProvider {
+		if w := claudeWindows(snap); len(w) > 0 {
+			groups = append(groups, Group{
+				Provider: ClaudeProvider,
+				Windows:  toWindows(w),
+				Note:     claudeNote(snap),
+			})
 		}
+	}
+	for _, p := range providers {
+		name := strings.ToLower(p.Provider)
+		if !all && name != want {
+			continue
+		}
+		if len(p.Windows) == 0 {
+			continue
+		}
+		groups = append(groups, Group{Provider: name, Windows: toWindows(p.Windows), Note: p.Note})
+	}
+	return groups
+}
+
+// claudeWindows converts the Anthropic snapshot into the shared window shape.
+// Buckets the plan does not have come back nil, so each is optional and a plan
+// with none yields an empty slice rather than a row of zeroes.
+func claudeWindows(snap usage.Snapshot) []provider.Window {
+	out := make([]provider.Window, 0, 4)
+	add := func(label string, b *usage.Bucket) {
+		if b != nil {
+			out = append(out, provider.Window{Label: label, Utilization: b.Utilization, ResetsAt: b.ResetsAt})
+		}
+	}
+	add("5h", snap.FiveHour)
+	add("7d", snap.SevenDay)
+	for _, nb := range snap.PerModelBuckets() {
+		out = append(out, provider.Window{Label: nb.Label, Utilization: nb.Bucket.Utilization, ResetsAt: nb.Bucket.ResetsAt})
 	}
 	if x := snap.ExtraUsage; x != nil && x.IsEnabled && x.Utilization != nil {
-		seg := fmt.Sprintf("extra %.0f%%", *x.Utilization)
-		if o.Color {
-			seg = fmt.Sprintf("#[fg=%s]%s%s", colourFor(*x.Utilization, o), seg, colourOff)
-		}
-		parts = append(parts, seg)
+		out = append(out, provider.Window{Label: "extra", Utilization: *x.Utilization})
 	}
-	return strings.Join(parts, " · ")
+	return out
 }
 
-func renderPlain(snap usage.Snapshot, o Options) string {
-	var sb strings.Builder
-	for _, b := range buckets(snap) {
-		fmt.Fprintf(&sb, "%-12s %5.1f%%", b.Label, b.Bucket.Utilization)
-		if left := b.Bucket.ResetsAt.Sub(o.now()); left > 0 {
-			fmt.Fprintf(&sb, "  resets in %s", shortDuration(left))
-		}
-		sb.WriteString("\n")
+// claudeNote surfaces the pay-as-you-go balance, which is a currency amount and
+// so has no place among the percentage windows. Providers use Note the same way
+// for their plan name.
+func claudeNote(snap usage.Snapshot) string {
+	x := snap.ExtraUsage
+	if x == nil || !x.IsEnabled || x.UsedCredits == nil || x.MonthlyLimit == nil {
+		return ""
 	}
-	if x := snap.ExtraUsage; x != nil && x.IsEnabled {
-		sb.WriteString("extra        ")
-		if x.Utilization != nil {
-			fmt.Fprintf(&sb, "%5.1f%%", *x.Utilization)
+	return fmt.Sprintf("$%.2f of $%.2f", *x.UsedCredits, *x.MonthlyLimit)
+}
+
+func renderCompact(groups []Group, o Options) string {
+	var parts []string
+	for _, g := range groups {
+		var segs []string
+		if o.ShowLabels {
+			segs = append(segs, g.Provider)
+		}
+		for _, w := range g.Windows {
+			seg := fmt.Sprintf("%s %.0f%%", w.Label, w.Utilization)
+			if o.Color {
+				seg = fmt.Sprintf("#[fg=%s]%s%s", colourFor(w.Utilization, o), seg, colourOff)
+			}
+			segs = append(segs, seg)
+		}
+		if o.Reset && len(g.Windows) > 0 {
+			if left := g.Windows[0].ResetsAt.Sub(o.now()); left > 0 {
+				segs = append(segs, "↻"+shortDuration(left))
+			}
+		}
+		// Windows within a source read as one reading, so they keep the light
+		// separator. Sources are different readings and get a heavier one, which
+		// also stops "claude 5h 6% codex 5h 12%" from looking like four windows
+		// of the same thing.
+		if o.ShowLabels && len(segs) > 1 {
+			parts = append(parts, segs[0]+" "+strings.Join(segs[1:], " · "))
 		} else {
-			sb.WriteString("      ")
+			parts = append(parts, strings.Join(segs, " · "))
 		}
-		if x.UsedCredits != nil && x.MonthlyLimit != nil {
-			fmt.Fprintf(&sb, "  $%.2f of $%.2f", *x.UsedCredits, *x.MonthlyLimit)
+	}
+	return strings.Join(parts, " │ ")
+}
+
+func renderPlain(groups []Group, o Options) string {
+	var sb strings.Builder
+	for _, g := range groups {
+		if o.ShowLabels {
+			fmt.Fprintf(&sb, "%s\n", g.Provider)
 		}
-		sb.WriteString("\n")
+		for _, w := range g.Windows {
+			fmt.Fprintf(&sb, "%-12s %5.1f%%", w.Label, w.Utilization)
+			if left := w.ResetsAt.Sub(o.now()); left > 0 {
+				fmt.Fprintf(&sb, "  resets in %s", shortDuration(left))
+			}
+			sb.WriteString("\n")
+		}
+		if g.Note != "" {
+			fmt.Fprintf(&sb, "%s\n", g.Note)
+		}
 	}
 	return sb.String()
-}
-
-// buckets flattens the snapshot into display order, skipping the nil ones.
-// The per-model buckets come from the snapshot's own helper so this stays in
-// step with the TUI if new models are added there.
-func buckets(snap usage.Snapshot) []usage.NamedBucket {
-	out := make([]usage.NamedBucket, 0, 4)
-	if snap.FiveHour != nil {
-		out = append(out, usage.NamedBucket{Label: "5h", Bucket: *snap.FiveHour})
-	}
-	if snap.SevenDay != nil {
-		out = append(out, usage.NamedBucket{Label: "7d", Bucket: *snap.SevenDay})
-	}
-	out = append(out, snap.PerModelBuckets()...)
-	return out
 }
 
 func colourFor(util float64, o Options) string {

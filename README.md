@@ -328,6 +328,48 @@ In tmux, with colour thresholds:
 set -g status-right "#(claudeops statusline --color --reset) │ %H:%M"
 ```
 
+### Which quota it shows
+
+By default it **follows the agent in the pane you are looking at**: a Claude Code
+pane shows the Anthropic window, an opencode pane wired to OpenAI shows the Codex
+one. Showing every provider at once makes the number you care about harder to
+find.
+
+```console
+$ claudeops statusline --provider auto     # follow the active pane (default)
+$ claudeops statusline --provider claude   # pin one
+$ claudeops statusline --provider all --labels
+claude 5h 6% · 7d 29% │ codex 5h 12%
+```
+
+Configure the default and the agent mapping in `~/.claudeops/config.toml`:
+
+```toml
+[statusline]
+provider = "auto"        # or "all", or a provider name
+
+[statusline.agents]
+claude   = "claude"
+opencode = "codex"       # point this at "claude" if your opencode uses Anthropic
+codex    = "codex"
+```
+
+Detection reads the active pane's command, and when that is a runtime (`node`,
+`bun`, a shell) it walks one level into the process tree — the same trick a
+window-icon script uses. Matching is per argument on the basename, never a
+substring of the whole command line, so a project directory named
+`~/work/claude-tools` does not make every pane look like Claude.
+
+To switch on the fly from tmux, keep the choice in a user option and pass it
+through:
+
+```tmux
+set -g @quota "auto"
+set -g status-right "#(claudeops statusline --color --provider '#{@quota}')"
+bind Q run-shell "tmux set -g @quota \
+  \"#{?#{==:#{@quota},auto},claude,#{?#{==:#{@quota},claude},all,auto}}\""
+```
+
 **It is cached on purpose.** The usage client caches in process, which works for
 the TUI because it is long lived. A status bar spawns a new process on every
 redraw — every couple of seconds — so that cache never survives to be used and
@@ -344,6 +386,8 @@ expired.
 
 | Flag | Default | Purpose |
 |---|---|---|
+| `--provider` | config, then `auto` | a provider name, `all`, or `auto` to follow the active pane |
+| `--labels` | off | prefix each group with its provider name |
 | `--format` | `compact` | `compact`, `plain` or `json` |
 | `--color` | off | wrap compact output in tmux colour escapes |
 | `--reset` | off | append time left in the 5h window |

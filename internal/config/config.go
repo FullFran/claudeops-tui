@@ -32,6 +32,7 @@ type Settings struct {
 	Calendar    CalendarSettings    `toml:"calendar"`
 	Keybindings KeybindingsSettings `toml:"keybindings"`
 	Usage       UsageSettings       `toml:"usage"`
+	Statusline  StatuslineSettings  `toml:"statusline"`
 	Insights    InsightsSettings    `toml:"insights"`
 	Export      ExportSettings      `toml:"export"`
 	// Sources is the per-source ingestion config. When absent (nil or empty),
@@ -92,6 +93,21 @@ func (e ExportSettings) Validate() error {
 // defaults help avoid HTTP 429 responses.
 type UsageSettings struct {
 	CacheTTLSeconds int `toml:"cache_ttl_seconds"`
+}
+
+// StatuslineSettings controls `claudeops statusline`.
+type StatuslineSettings struct {
+	// Provider selects what the status line shows:
+	//   "auto"   follow the agent running in the active tmux pane
+	//   "all"    every provider with credentials
+	//   a name   pin one provider, e.g. "claude" or "codex"
+	Provider string `toml:"provider"`
+
+	// Agents maps a process name to the provider whose quota that agent
+	// spends. The defaults cover the common cases; override when your setup
+	// differs — an opencode pointed at Anthropic models should map to
+	// "claude", not "codex".
+	Agents map[string]string `toml:"agents"`
 }
 
 // DashboardSettings toggles individual widgets on the main dashboard tab.
@@ -206,6 +222,15 @@ func DefaultSettings() Settings {
 		},
 		Usage: UsageSettings{
 			CacheTTLSeconds: 300,
+		},
+		Statusline: StatuslineSettings{
+			Provider: "auto",
+			Agents: map[string]string{
+				"claude":   "claude",
+				"opencode": "codex",
+				"codex":    "codex",
+				"crush":    "codex",
+			},
 		},
 		Export: ExportSettings{
 			Headers: map[string]string{},

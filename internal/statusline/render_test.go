@@ -87,7 +87,7 @@ func TestRenderCompact(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.opts.Now = fixedNow
-			got, err := Render(tc.snap, tc.opts)
+			got, err := Render(tc.snap, nil, tc.opts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +112,7 @@ func TestRenderCompactColour(t *testing.T) {
 	}
 	for _, tc := range cases {
 		snap := usage.Snapshot{FiveHour: bucket(tc.util, time.Hour)}
-		got, err := Render(snap, Options{Color: true, Now: fixedNow})
+		got, err := Render(snap, nil, Options{Color: true, Now: fixedNow})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +127,7 @@ func TestRenderCompactColour(t *testing.T) {
 
 func TestRenderCompactCustomThresholds(t *testing.T) {
 	snap := usage.Snapshot{FiveHour: bucket(50, time.Hour)}
-	got, err := Render(snap, Options{Color: true, WarnAt: 40, CritAt: 90, Now: fixedNow})
+	got, err := Render(snap, nil, Options{Color: true, WarnAt: 40, CritAt: 90, Now: fixedNow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestRenderPlain(t *testing.T) {
 			MonthlyLimit: ptr(50.0),
 		},
 	}
-	got, err := Render(snap, Options{Format: FormatPlain, Now: fixedNow})
+	got, err := Render(snap, nil, Options{Format: FormatPlain, Now: fixedNow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,16 +160,25 @@ func TestRenderPlain(t *testing.T) {
 
 func TestRenderJSONRoundTrips(t *testing.T) {
 	snap := usage.Snapshot{FiveHour: bucket(42, time.Hour), SevenDay: bucket(18, 0)}
-	got, err := Render(snap, Options{Format: FormatJSON, Now: fixedNow})
+	got, err := Render(snap, nil, Options{Format: FormatJSON, Now: fixedNow})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var back usage.Snapshot
+	var back []Group
 	if err := json.Unmarshal([]byte(got), &back); err != nil {
 		t.Fatalf("output is not valid JSON: %v", err)
 	}
-	if back.FiveHour == nil || back.FiveHour.Utilization != 42 {
-		t.Errorf("five hour bucket did not survive the round trip: %s", got)
+	if len(back) != 1 || back[0].Provider != ClaudeProvider {
+		t.Fatalf("expected one claude group, got %s", got)
+	}
+	if len(back[0].Windows) != 2 || back[0].Windows[0].Label != "5h" || back[0].Windows[0].Utilization != 42 {
+		t.Errorf("windows did not survive the round trip: %s", got)
+	}
+	// The JSON contract is snake_case and must not drift with internal types.
+	for _, want := range []string{`"provider"`, `"windows"`, `"label"`, `"utilization"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing key %s in %s", want, got)
+		}
 	}
 }
 
