@@ -53,6 +53,7 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		format  = fs.String("format", "compact", "output format: compact, plain or json")
 		color   = fs.Bool("color", false, "wrap compact output in tmux colour escapes")
 		labels  = fs.Bool("labels", false, "prefix each group with its provider name")
+		prefix  = fs.String("prefix", "", "text emitted before the output, only when there is output")
 		reset   = fs.Bool("reset", false, "append the time left in the first window")
 		refresh = fs.Bool("refresh", false, "ignore the cache and fetch now")
 		ttl     = fs.Duration("ttl", statusline.DefaultTTL, "how long a cached snapshot is reused")
@@ -82,6 +83,7 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		Format:     statusline.Format(*format),
 		Provider:   want,
 		ShowLabels: *labels,
+		Prefix:     *prefix,
 		Color:      *color,
 		Reset:      *reset,
 		WarnAt:     *warnAt,
