@@ -124,6 +124,7 @@ claudeops hooks status           # show which hooks are registered
 claudeops hooks handle           # handle a hook event on stdin (invoked by Claude Code)
 claudeops push [--dry-run] [--since RFC3339]   # push metrics to an OTLP endpoint
 claudeops otel-config apply      # write Claude Code OTel env vars to settings.json
+claudeops statusline             # one-line usage summary for a terminal status bar
 claudeops otel-config status     # show the OTel telemetry configuration
 claudeops otel-config remove     # remove the OTel telemetry configuration
 claudeops version
@@ -301,6 +302,58 @@ Add to your MCP config file (e.g. `~/.cursor/mcp.json`):
 
 Remove the entry to deactivate.
 
+### Status bar
+
+`claudeops statusline` prints the current quota as one line, for tmux, Zellij,
+a shell prompt, or anything else that can run a command.
+
+```console
+$ claudeops statusline
+5h 6% · 7d 28%
+
+$ claudeops statusline --reset
+5h 6% · 7d 28% · ↻3h23m
+
+$ claudeops statusline --format plain
+5h             6.0%  resets in 3h23m
+7d            28.0%  resets in 4d12h
+
+$ claudeops statusline --format json
+{"five_hour":{"utilization":6,...
+```
+
+In tmux, with colour thresholds:
+
+```tmux
+set -g status-right "#(claudeops statusline --color --reset) │ %H:%M"
+```
+
+**It is cached on purpose.** The usage client caches in process, which works for
+the TUI because it is long lived. A status bar spawns a new process on every
+redraw — every couple of seconds — so that cache never survives to be used and
+every redraw would hit the network. `statusline` keeps the snapshot in
+`~/.claudeops/usage-cache.json` and serves it for `--ttl` (one minute by
+default), so a bar redrawing every two seconds makes one request a minute
+instead of thirty. Measured on a warm cache: 5 ms per call versus 460 ms for a
+live fetch.
+
+It also fails quietly. If the fetch breaks it serves the stale snapshot rather
+than a gap in your bar, and if there is nothing cached at all it prints nothing
+and exits zero. A status bar is not where you want to discover that a token
+expired.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--format` | `compact` | `compact`, `plain` or `json` |
+| `--color` | off | wrap compact output in tmux colour escapes |
+| `--reset` | off | append time left in the 5h window |
+| `--ttl` | `1m` | how long a cached snapshot is reused |
+| `--refresh` | off | ignore the cache and fetch now |
+| `--timeout` | `3s` | budget for a live fetch |
+| `--warn-at` | `60` | utilisation that turns the segment amber |
+| `--crit-at` | `85` | utilisation that turns the segment red |
+
+
 ## Files
 
 | Path | Purpose |
@@ -310,6 +363,7 @@ Remove the entry to deactivate.
 | `~/.claudeops/config.toml` | dashboard widgets, thresholds, tab visibility, usage polling interval, export settings (auto-created on first run) |
 | `~/.claudeops/providers.toml` | optional user-defined quota providers (see [`docs/providers.md`](./docs/providers.md)) |
 | `~/.claudeops/current-task.json` | sidecar for the active task |
+| `~/.claudeops/usage-cache.json` | statusline snapshot cache, atomic + 0600 |
 | `~/.claudeops/live/` | hook-written live session sidecars (Classroom tab) |
 | `~/.claude/projects/*.jsonl` | source data — read only |
 | `~/.codex/sessions/**/*.jsonl` | Codex source data — read only (override the parent dir with `CODEX_HOME`) |

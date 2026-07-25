@@ -54,6 +54,7 @@ var (
 	runReingestCommand   = cmdReingest
 	runUpdateCommand     = cmdUpdate
 	runHooksCommand      = cmdHooks
+	runStatuslineCommand = cmdStatusline
 	runPushCommand       = cmdPush
 	runOTelConfigCommand = cmdOTelConfig
 )
@@ -86,6 +87,8 @@ func runArgs(args []string) error {
 		return runPushCommand(args[1:])
 	case "otel-config":
 		return runOTelConfigCommand(args[1:])
+	case "statusline":
+		return runStatuslineCommand(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -108,6 +111,7 @@ Usage:
   claudeops update                              update the installed CLI
   claudeops hooks install                       register Claude Code hooks for live status
   claudeops hooks uninstall                     remove claudeops hooks from settings.json
+  claudeops statusline [--color] [--reset]      one-line usage summary for a status bar
   claudeops hooks status                        show which hooks are registered
   claudeops hooks handle                        handle a Claude Code hook event on stdin (invoked by Claude Code)
   claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
