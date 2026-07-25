@@ -19,6 +19,7 @@ type Paths struct {
 	CurrentTaskPath string // ~/.claudeops/current-task.json
 	ConfigPath      string // ~/.claudeops/config.toml
 	LiveDir         string // ~/.claudeops/live — hook-written session sidecars
+	UsageCachePath  string // ~/.claudeops/usage-cache.json — statusline snapshot cache
 }
 
 // Default builds Paths from the user's HOME (or HOME override for tests).
@@ -46,6 +47,7 @@ func ForHome(home string) Paths {
 		CurrentTaskPath: filepath.Join(data, "current-task.json"),
 		ConfigPath:      filepath.Join(data, "config.toml"),
 		LiveDir:         filepath.Join(data, "live"),
+		UsageCachePath:  filepath.Join(data, "usage-cache.json"),
 	}
 }
 
