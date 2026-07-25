@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/usage"
 )
 
@@ -28,9 +29,15 @@ const DefaultTTL = time.Minute
 // Cached is the on-disk representation. The snapshot is stored as fetched;
 // StoredAt records when we wrote it, which is what TTL is measured against.
 // Snapshot.FetchedAt is the client's own timestamp and may be older.
+//
+// Providers holds the registry-backed services (Codex, Copilot, Gemini and any
+// user-defined ones). Anthropic is not among them: it has its own client and
+// lands in Snapshot. Only successful fetches are stored, so a provider that was
+// failing simply disappears from the bar rather than caching an error.
 type Cached struct {
-	Snapshot usage.Snapshot `json:"snapshot"`
-	StoredAt time.Time      `json:"stored_at"`
+	Snapshot  usage.Snapshot   `json:"snapshot"`
+	Providers []provider.Usage `json:"providers,omitempty"`
+	StoredAt  time.Time        `json:"stored_at"`
 }
 
 // Age reports how long ago the entry was written.
@@ -73,11 +80,11 @@ func ReadCache(path string) (Cached, error) {
 // half-finished by a concurrent reader. Write to a temporary file in the same
 // directory and rename, which is atomic on POSIX. Mode 0600 because the
 // snapshot describes the account's quota.
-func WriteCache(path string, snap usage.Snapshot, now time.Time) error {
+func WriteCache(path string, snap usage.Snapshot, providers []provider.Usage, now time.Time) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	b, err := json.Marshal(Cached{Snapshot: snap, StoredAt: now})
+	b, err := json.Marshal(Cached{Snapshot: snap, Providers: providers, StoredAt: now})
 	if err != nil {
 		return err
 	}
