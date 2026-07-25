@@ -145,11 +145,7 @@ func childPIDs(pid string) []string {
 	if err != nil {
 		return nil
 	}
-	var pids []string
-	for _, l := range strings.Fields(string(out)) {
-		pids = append(pids, l)
-	}
-	return pids
+	return strings.Fields(string(out))
 }
 
 // cmdline reads a process's argv, NUL separators replaced by spaces. Linux
