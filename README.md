@@ -304,108 +304,25 @@ Remove the entry to deactivate.
 
 ### Status bar
 
-`claudeops statusline` prints the current quota as one line, for tmux, Zellij,
-a shell prompt, or anything else that can run a command.
+`claudeops statusline` prints the current quota as one line, for tmux, Zellij, a
+shell prompt, or anything else that can run a command. It ships with the CLI.
 
 ```console
 $ claudeops statusline
-5h 6% · 7d 28%
-
-$ claudeops statusline --reset
-5h 6% · 7d 28% · ↻3h23m
-
-$ claudeops statusline --format plain
-5h             6.0%  resets in 3h23m
-7d            28.0%  resets in 4d12h
-
-$ claudeops statusline --format json
-{"five_hour":{"utilization":6,...
+5h 6% · 7d 29%
 ```
-
-Add a label with `--prefix`. It is omitted when there is nothing to report, so
-you never get a heading with no value under it:
-
-```console
-$ claudeops statusline --prefix claudeops
-claudeops 5h 6% · 7d 29%
-```
-
-In tmux, with colour thresholds:
 
 ```tmux
-set -g status-right "#(claudeops statusline --color --reset) │ %H:%M"
+set -g status-right "#(claudeops statusline --color) │ %H:%M"
 ```
 
-### Which quota it shows
+By default it follows the agent in the active pane — a Claude Code pane shows the
+Anthropic window, an opencode pane wired to OpenAI shows the Codex one — and it
+serves an on-disk cache so a bar redrawing every couple of seconds makes one
+request a minute rather than thirty.
 
-By default it **follows the agent in the pane you are looking at**: a Claude Code
-pane shows the Anthropic window, an opencode pane wired to OpenAI shows the Codex
-one. Showing every provider at once makes the number you care about harder to
-find.
-
-```console
-$ claudeops statusline --provider auto     # follow the active pane (default)
-$ claudeops statusline --provider claude   # pin one
-$ claudeops statusline --provider all --labels
-claude 5h 6% · 7d 29% │ codex 5h 12%
-```
-
-Configure the default and the agent mapping in `~/.claudeops/config.toml`:
-
-```toml
-[statusline]
-provider = "auto"        # or "all", or a provider name
-
-[statusline.agents]
-claude   = "claude"
-opencode = "codex"       # point this at "claude" if your opencode uses Anthropic
-codex    = "codex"
-```
-
-Detection reads the active pane's command, and when that is a runtime (`node`,
-`bun`, a shell) it walks one level into the process tree — the same trick a
-window-icon script uses. Matching is per argument on the basename, never a
-substring of the whole command line, so a project directory named
-`~/work/claude-tools` does not make every pane look like Claude.
-
-To switch on the fly from tmux, keep the choice in a user option and pass it
-through:
-
-```tmux
-set -g @quota "auto"
-set -g status-right "#(claudeops statusline --color --provider '#{@quota}')"
-bind Q run-shell "tmux set -g @quota \
-  \"#{?#{==:#{@quota},auto},claude,#{?#{==:#{@quota},claude},all,auto}}\""
-```
-
-**It is cached on purpose.** The usage client caches in process, which works for
-the TUI because it is long lived. A status bar spawns a new process on every
-redraw — every couple of seconds — so that cache never survives to be used and
-every redraw would hit the network. `statusline` keeps the snapshot in
-`~/.claudeops/usage-cache.json` and serves it for `--ttl` (one minute by
-default), so a bar redrawing every two seconds makes one request a minute
-instead of thirty. Measured on a warm cache: 5 ms per call versus 460 ms for a
-live fetch.
-
-It also fails quietly. If the fetch breaks it serves the stale snapshot rather
-than a gap in your bar, and if there is nothing cached at all it prints nothing
-and exits zero. A status bar is not where you want to discover that a token
-expired.
-
-| Flag | Default | Purpose |
-|---|---|---|
-| `--provider` | config, then `auto` | a provider name, `all`, or `auto` to follow the active pane |
-| `--labels` | off | prefix each group with its provider name |
-| `--prefix` | none | text before the output, emitted only when there is output |
-| `--format` | `compact` | `compact`, `plain` or `json` |
-| `--color` | off | wrap compact output in tmux colour escapes |
-| `--reset` | off | append time left in the 5h window |
-| `--ttl` | `1m` | how long a cached snapshot is reused |
-| `--refresh` | off | ignore the cache and fetch now |
-| `--timeout` | `3s` | budget for a live fetch |
-| `--warn-at` | `60` | utilisation that turns the segment amber |
-| `--crit-at` | `85` | utilisation that turns the segment red |
-
+Full reference, including the agent mapping, Zellij and shell prompts, and how to
+switch provider from a keybinding: [`docs/statusline.md`](./docs/statusline.md).
 
 ## Files
 
@@ -541,6 +458,7 @@ drill-downs, computed insights, live Classroom, MCP server, and OTLP export.
 - [`docs/architecture.md`](./docs/architecture.md) — package map, data flow, decisions
 - [`docs/upgrading.md`](./docs/upgrading.md) — behavior changes that need action from you
 - [`docs/providers.md`](./docs/providers.md) — built-in and user-defined quota providers
+- [`docs/statusline.md`](./docs/statusline.md) — quota in a tmux/Zellij/shell status bar
 - [`docs/jsonl-format.md`](./docs/jsonl-format.md) — observed Claude Code and Codex event shapes
 - [`docs/oauth-usage-endpoint.md`](./docs/oauth-usage-endpoint.md) — endpoint reference
 - [`docs/limitations.md`](./docs/limitations.md) — what's broken, fragile, or missing
