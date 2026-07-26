@@ -53,6 +53,8 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 			return setStatuslineEnabled(p, out, true)
 		case "disable":
 			return setStatuslineEnabled(p, out, false)
+		case "doctor":
+			return cmdStatuslineDoctor(p, out, settings, fetch, registry, 8*time.Second)
 		case "status":
 			state := "disabled"
 			if settings.Statusline.IsEnabled() {

@@ -236,9 +236,48 @@ reusing internal structs, so it does not drift when those change.
 
 ## Troubleshooting
 
+Start with the doctor. The status line drops failures on purpose — a bar is no
+place to learn that a token expired — so this is where that gets said out loud:
+
+```console
+$ claudeops statusline doctor
+config      ~/.claudeops/config.toml
+statusline  enabled
+provider    auto  (active pane → claude)
+cache       27s old
+
+claude    stale   usage endpoint rate-limited (HTTP 429); serving cache from 28s ago
+codex     ok      7d 0%  (plan: plus, via opencode)
+copilot   absent  no credentials found
+                  → sign in with the GitHub Copilot CLI, or your editor's Copilot extension
+gemini    absent  no credentials found
+                  → run `gemini auth`, or sign in to google through opencode
+
+agent mapping
+  claude     → claude
+  opencode   → codex
+```
+
+The states are deliberately distinct:
+
+| State | Meaning | Needs action |
+|---|---|---|
+| `ok` | answered with data | no |
+| `stale` | refresh failed, cache still serving — the bar is fine | no |
+| `empty` | authenticated, but this plan reports no quota | no |
+| `absent` | no credentials; you do not use this service | no |
+| `error` | nothing usable | yes |
+
+It exits non-zero only for `error`, so `claudeops statusline doctor` can gate a
+script without failing on a service you simply do not use.
+
+`via <source>` names the credential store that answered. When a provider can
+read more than one — Codex takes the Codex CLI's `auth.json` *or* an opencode
+`openai` session — that is the difference between "run `codex login`" and "you
+are already signed in, through opencode".
+
 **Nothing prints.** By design when there is nothing to say. Run
-`claudeops statusline --refresh --format plain` to see the unrendered state, and
-`claudeops` (the TUI) to check the provider is detected at all.
+`claudeops statusline --refresh --format plain` to see the unrendered state.
 
 **Wrong provider in a pane.** Check what the pane actually runs — tmux reports
 the foreground process, which for a wrapper script is `sh`. Add that agent's

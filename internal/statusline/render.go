@@ -146,7 +146,7 @@ func selectGroups(snap usage.Snapshot, providers []provider.Usage, want string) 
 
 	var groups []Group
 	if all || want == ClaudeProvider {
-		if w := claudeWindows(snap); len(w) > 0 {
+		if w := ClaudeWindows(snap); len(w) > 0 {
 			groups = append(groups, Group{
 				Provider: ClaudeProvider,
 				Windows:  toWindows(w),
@@ -167,10 +167,10 @@ func selectGroups(snap usage.Snapshot, providers []provider.Usage, want string) 
 	return groups
 }
 
-// claudeWindows converts the Anthropic snapshot into the shared window shape.
+// ClaudeWindows converts the Anthropic snapshot into the shared window shape.
 // Buckets the plan does not have come back nil, so each is optional and a plan
 // with none yields an empty slice rather than a row of zeroes.
-func claudeWindows(snap usage.Snapshot) []provider.Window {
+func ClaudeWindows(snap usage.Snapshot) []provider.Window {
 	out := make([]provider.Window, 0, 4)
 	add := func(label string, b *usage.Bucket) {
 		if b != nil {

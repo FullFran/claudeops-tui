@@ -123,6 +123,7 @@ Usage:
   claudeops statusline [--color] [--reset]      one-line usage summary for a status bar
   claudeops statusline enable | disable         turn the status line on or off
   claudeops statusline status                   show whether it is on, and which provider
+  claudeops statusline doctor                   explain what each provider can see, and why
   claudeops hooks status                        show which hooks are registered
   claudeops hooks handle                        handle a Claude Code hook event on stdin (invoked by Claude Code)
   claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
