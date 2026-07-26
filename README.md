@@ -324,6 +324,9 @@ request a minute rather than thirty.
 Full reference, including the agent mapping, Zellij and shell prompts, and how to
 switch provider from a keybinding: [`docs/statusline.md`](./docs/statusline.md).
 
+There is also an [opencode plugin](./plugins/opencode) that puts the same numbers
+beside the opencode prompt.
+
 ## Files
 
 | Path | Purpose |
@@ -459,6 +462,7 @@ drill-downs, computed insights, live Classroom, MCP server, and OTLP export.
 - [`docs/upgrading.md`](./docs/upgrading.md) — behavior changes that need action from you
 - [`docs/providers.md`](./docs/providers.md) — built-in and user-defined quota providers
 - [`docs/statusline.md`](./docs/statusline.md) — quota in a tmux/Zellij/shell status bar
+- [`plugins/opencode/`](./plugins/opencode) — the same, beside the opencode prompt
 - [`docs/jsonl-format.md`](./docs/jsonl-format.md) — observed Claude Code and Codex event shapes
 - [`docs/oauth-usage-endpoint.md`](./docs/oauth-usage-endpoint.md) — endpoint reference
 - [`docs/limitations.md`](./docs/limitations.md) — what's broken, fragile, or missing
