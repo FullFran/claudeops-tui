@@ -35,12 +35,38 @@ func (f *fakeFetcher) Get(context.Context) (usage.Snapshot, error) {
 	return f.snap, f.err
 }
 
+// statuslinePaths gives one test its own home with the status line pinned to a
+// provider.
+//
+// Without a config the command falls back to "auto", which asks the *host's*
+// tmux which agent occupies the active pane — so the result depended on what
+// the developer happened to be looking at while the suite ran, and the same
+// test resolved to Claude in one run and Codex in the next. None of the tests
+// here are about detection; they are about caching, formatting and selection,
+// so the provider is stated rather than discovered.
+func statuslinePaths(t *testing.T, want string) config.Paths {
+	t.Helper()
+	p := config.ForHome(t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(p.ConfigPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The agent map is written out as well so the file is a faithful stand-in
+	// for a real config rather than a fragment that silently drops defaults.
+	body := "[statusline]\nenabled = true\nprovider = \"" + want + "\"\n" +
+		"[statusline.agents]\nclaude = \"claude\"\ncodex = \"codex\"\n" +
+		"crush = \"codex\"\nopencode = \"codex\"\n"
+	if err := os.WriteFile(p.ConfigPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func snapAt(util float64) usage.Snapshot {
 	return usage.Snapshot{FiveHour: &usage.Bucket{Utilization: util, ResetsAt: time.Now().Add(time.Hour)}}
 }
 
 func TestStatuslineFetchesWhenNoCache(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	f := &fakeFetcher{snap: snapAt(42)}
 	var out bytes.Buffer
 
@@ -58,7 +84,7 @@ func TestStatuslineFetchesWhenNoCache(t *testing.T) {
 func TestStatuslineServesFreshCacheWithoutFetching(t *testing.T) {
 	// This is the whole reason the package exists: a bar redrawing every two
 	// seconds must not reach the network.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now())); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +103,7 @@ func TestStatuslineServesFreshCacheWithoutFetching(t *testing.T) {
 }
 
 func TestStatuslineRefetchesWhenCacheIsStale(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now().Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +122,7 @@ func TestStatuslineRefetchesWhenCacheIsStale(t *testing.T) {
 }
 
 func TestStatuslineRefreshFlagBypassesFreshCache(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now())); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +140,7 @@ func TestStatuslineRefreshFlagBypassesFreshCache(t *testing.T) {
 func TestStatuslineFallsBackToStaleOnFetchFailure(t *testing.T) {
 	// Stale beats blank: a quota from an hour ago still says roughly where you
 	// stand, while an empty segment reads as a broken bar.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now().Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +158,7 @@ func TestStatuslineFallsBackToStaleOnFetchFailure(t *testing.T) {
 func TestStatuslineSilentWhenFetchFailsAndNoCache(t *testing.T) {
 	// Nothing useful to say, so say nothing and exit zero. A status bar is not
 	// where you learn that a token expired.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	f := &fakeFetcher{err: errors.New("no credentials")}
 	var out bytes.Buffer
 
@@ -145,7 +171,7 @@ func TestStatuslineSilentWhenFetchFailsAndNoCache(t *testing.T) {
 }
 
 func TestStatuslineWritesCacheAfterFetch(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	f := &fakeFetcher{snap: snapAt(42)}
 	var out bytes.Buffer
 
@@ -171,7 +197,7 @@ func TestStatuslineFormats(t *testing.T) {
 		{args: []string{"--color=tmux"}, want: "#[fg="},
 	}
 	for _, tc := range cases {
-		p := config.ForHome(t.TempDir())
+		p := statuslinePaths(t, "claude")
 		f := &fakeFetcher{snap: snapAt(42)}
 		var out bytes.Buffer
 		if err := cmdStatuslineWith(p, &out, tc.args, f, emptyRegistry{}); err != nil {
@@ -184,7 +210,7 @@ func TestStatuslineFormats(t *testing.T) {
 }
 
 func TestStatuslineTTLFlagIsHonoured(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now().Add(-30*time.Second))); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +226,7 @@ func TestStatuslineTTLFlagIsHonoured(t *testing.T) {
 }
 
 func TestStatuslineEmptySnapshotPrintsNothing(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	f := &fakeFetcher{snap: usage.Snapshot{}}
 	var out bytes.Buffer
 	if err := cmdStatuslineWith(p, &out, nil, f, emptyRegistry{}); err != nil {
@@ -240,7 +266,7 @@ func TestStatuslineProviderFlagSelects(t *testing.T) {
 		{flag: "all", want: "5h 42% │ 5h 12%"},
 	}
 	for _, tc := range cases {
-		p := config.ForHome(t.TempDir())
+		p := statuslinePaths(t, "claude")
 		var out bytes.Buffer
 		if err := cmdStatuslineWith(p, &out, []string{"--provider", tc.flag}, &fakeFetcher{snap: snapAt(42)}, reg); err != nil {
 			t.Fatal(err)
@@ -274,7 +300,7 @@ func TestStatuslineProviderFallsBackToConfig(t *testing.T) {
 
 func TestStatuslineProviderErrorsAreSkipped(t *testing.T) {
 	// A provider that is merely logged out must not blank the whole segment.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	var out bytes.Buffer
 	reg := failingRegistry{}
 	if err := cmdStatuslineWith(p, &out, []string{"--provider", "all"}, &fakeFetcher{snap: snapAt(42)}, reg); err != nil {
@@ -293,7 +319,7 @@ func (failingRegistry) FetchAll(context.Context) []provider.Result {
 
 func TestStatuslineDisabledPrintsNothing(t *testing.T) {
 	// Disabled must short-circuit before any work: no fetch, no cache read.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -316,6 +342,11 @@ func TestStatuslineDisabledPrintsNothing(t *testing.T) {
 func TestStatuslineEnabledByDefaultForOldConfigs(t *testing.T) {
 	// A config file written before the key existed has no [statusline] section.
 	// That must keep working rather than silently turning the feature off.
+	//
+	// The point here is the default for `enabled`, so the file deliberately
+	// carries no statusline section at all — which also means no provider to
+	// pin. It is passed on the command line instead, keeping the test off the
+	// host's tmux.
 	p := config.ForHome(t.TempDir())
 	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -324,7 +355,8 @@ func TestStatuslineEnabledByDefaultForOldConfigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := cmdStatuslineWith(p, &out, nil, &fakeFetcher{snap: snapAt(42)}, emptyRegistry{}); err != nil {
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "claude"},
+		&fakeFetcher{snap: snapAt(42)}, emptyRegistry{}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(out.String()) != "5h 42%" {
@@ -333,7 +365,7 @@ func TestStatuslineEnabledByDefaultForOldConfigs(t *testing.T) {
 }
 
 func TestStatuslineEnableDisableRoundTrip(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	var out bytes.Buffer
 
 	if err := cmdStatuslineWith(p, &out, []string{"disable"}, nil, nil); err != nil {
@@ -362,7 +394,7 @@ func TestStatuslineEnableDisableRoundTrip(t *testing.T) {
 
 func TestStatuslineToggleKeepsOtherSettings(t *testing.T) {
 	// Writing the config must not clobber unrelated keys the user set.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +422,7 @@ func TestStatuslineToggleKeepsOtherSettings(t *testing.T) {
 }
 
 func TestStatuslineStatusSubcommand(t *testing.T) {
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	var out bytes.Buffer
 	if err := cmdStatuslineWith(p, &out, []string{"status"}, nil, nil); err != nil {
 		t.Fatal(err)
@@ -430,7 +462,7 @@ func TestStatuslineOnlyAsksSourcesThatCanAnswer(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.flag, func(t *testing.T) {
-			p := config.ForHome(t.TempDir())
+			p := statuslinePaths(t, "claude")
 			regCalls := 0
 			f := &fakeFetcher{snap: snapAt(42)}
 			reg := countingRegistry{usages: []provider.Usage{codexResult(12)}, calls: &regCalls}
@@ -452,7 +484,7 @@ func TestStatuslineOnlyAsksSourcesThatCanAnswer(t *testing.T) {
 func TestStatuslineKeepsCachedDataForSourcesItSkipped(t *testing.T) {
 	// Skipping a source must not drop what is already known about it, or
 	// switching provider would start from nothing.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17),
 		[]provider.Usage{codexResult(12)}, time.Now().Add(-time.Hour))); err != nil {
 		t.Fatal(err)
@@ -476,7 +508,7 @@ func TestStatuslineForecastWarnsOnlyWhenGrounded(t *testing.T) {
 	// The warning has to come from observed history, not from the current
 	// reading, so the test writes a series the way a running client would.
 	now := time.Now()
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 
 	writeHistory := func(from, to float64, span time.Duration, resetsIn time.Duration) {
 		c := usage.New(p.ClaudeCreds)
@@ -545,7 +577,7 @@ func TestStatuslineClaudeRefreshDoesNotRenewProviderCache(t *testing.T) {
 	// sitting on Claude kept the Codex entry alive indefinitely — observed in
 	// the wild as a Codex percentage frozen for over an hour while the endpoint
 	// had long since moved on.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	stale := time.Now().Add(-time.Hour)
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), []provider.Usage{codexAt(0, stale)}, stale)); err != nil {
 		t.Fatal(err)
@@ -581,7 +613,7 @@ func TestStatuslineClaudeRefreshDoesNotRenewProviderCache(t *testing.T) {
 func TestStatuslineProviderRefreshDoesNotRenewSnapshotCache(t *testing.T) {
 	// The same defect in the other direction: rendering Codex carries the
 	// Anthropic snapshot forward, and must not mark it fresh in the process.
-	p := config.ForHome(t.TempDir())
+	p := statuslinePaths(t, "claude")
 	stale := time.Now().Add(-time.Hour)
 	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), []provider.Usage{codexAt(0, stale)}, stale)); err != nil {
 		t.Fatal(err)
@@ -608,5 +640,37 @@ func TestStatuslineProviderRefreshDoesNotRenewSnapshotCache(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out.String()); got != "5h 42%" {
 		t.Errorf("got %q, want the freshly fetched 5h 42%%", got)
+	}
+}
+
+func TestStatuslineDefaultsDoNotReadTheHostTerminal(t *testing.T) {
+	// Without a pinned provider the command asks the *host's* tmux which agent
+	// is in the active pane, so the suite's result depended on what the
+	// developer happened to be looking at: the same test resolved to Claude in
+	// one run and Codex in the next, failing half a dozen assertions for
+	// reasons that had nothing to do with the code under test.
+	//
+	// A fake tmux on PATH reports an opencode pane, which the default agent map
+	// resolves to Codex. A test that means to exercise the Claude path must be
+	// unmoved by that.
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf 'opencode\\t1\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX", "/tmp/fake-tmux,1,0")
+
+	p := statuslinePaths(t, "claude")
+	f := &fakeFetcher{snap: snapAt(42)}
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, nil, f, emptyRegistry{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "5h 42%" {
+		t.Errorf("got %q, want the Claude path regardless of the host terminal", got)
+	}
+	if f.calls != 1 {
+		t.Errorf("expected one Anthropic fetch, got %d", f.calls)
 	}
 }
