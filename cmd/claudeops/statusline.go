@@ -124,11 +124,25 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	}
 	now := time.Now()
 
-	// Serve the cache when it is fresh. This is the common path and the whole
-	// point: a bar redrawing every two seconds must not touch the network.
+	// Which sources this render needs. Resolved before the cache is consulted,
+	// because freshness is judged per section: a run that shows only Claude has
+	// no opinion on how old the provider entry is, and must not be blocked by
+	// it — nor allowed to vouch for it.
+	//
+	// Only ask the sources that can answer. Fetching every provider to render
+	// one of them wastes a request against each of the others' rate limits, and
+	// makes the command as slow as the slowest service you do not care about.
+	wantClaude := want == statusline.ProviderAll || strings.EqualFold(want, statusline.ClaudeProvider)
+	wantRegistry := want != statusline.ClaudeProvider
+
+	// Serve the cache when the sections being shown are fresh. This is the
+	// common path and the whole point: a bar redrawing every two seconds must
+	// not touch the network.
 	cached, cacheErr := statusline.ReadCache(p.UsageCachePath)
 	haveCache := cacheErr == nil
-	if haveCache && !*refresh && cached.Fresh(now, *ttl) {
+	if haveCache && !*refresh &&
+		(!wantClaude || cached.Fresh(now, *ttl)) &&
+		(!wantRegistry || cached.ProvidersFresh(now, *ttl)) {
 		if *forecast {
 			opts.Warning = exhaustionWarning(p, cached.Snapshot, now)
 		}
@@ -143,12 +157,6 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-
-	// Only ask the sources that can answer. Fetching every provider to render
-	// one of them wastes a request against each of the others' rate limits, and
-	// makes the command as slow as the slowest service you do not care about.
-	wantClaude := want == statusline.ProviderAll || strings.EqualFold(want, statusline.ClaudeProvider)
-	wantRegistry := want != statusline.ClaudeProvider
 
 	var (
 		snap    usage.Snapshot
@@ -190,9 +198,26 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		snap = cached.Snapshot
 	}
 
+	// Timestamp only what this run actually fetched; anything merely carried
+	// forward keeps the time it was really retrieved. Stamping the whole file
+	// with now is what let a Claude-only render vouch for a Codex reading it
+	// had never made, holding it fresh forever.
+	entry := statusline.Cached{
+		Snapshot:          snap,
+		Providers:         usages,
+		StoredAt:          cached.StoredAt,
+		ProvidersStoredAt: cached.ProvidersStoredAt,
+	}
+	if wantClaude && snapErr == nil {
+		entry.StoredAt = now
+	}
+	if wantRegistry {
+		entry.ProvidersStoredAt = now
+	}
+
 	// A cache write failure is not worth failing the render over — the numbers
 	// are already in hand, and the only cost is fetching again next time.
-	_ = statusline.WriteCache(p.UsageCachePath, snap, usages, now)
+	_ = statusline.WriteCache(p.UsageCachePath, entry)
 	if *forecast {
 		opts.Warning = exhaustionWarning(p, snap, now)
 	}

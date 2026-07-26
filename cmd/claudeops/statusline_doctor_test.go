@@ -72,7 +72,7 @@ func TestDoctorDistinguishesStaleFromBroken(t *testing.T) {
 	// is worth reporting and not worth a non-zero exit — rate limiting in
 	// particular clears itself.
 	p := config.ForHome(t.TempDir())
-	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17), nil, time.Now()); err != nil {
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	out, err := doctor(t, p, &fakeFetcher{err: errors.New("HTTP 429")}, emptyRegistry{})

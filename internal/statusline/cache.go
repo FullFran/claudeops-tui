@@ -42,18 +42,45 @@ const DefaultTTL = 5 * time.Minute
 // user-defined ones). Anthropic is not among them: it has its own client and
 // lands in Snapshot. Only successful fetches are stored, so a provider that was
 // failing simply disappears from the bar rather than caching an error.
+//
+// The two sections expire independently, hence two timestamps. A render only
+// fetches the sources it is about to show, and carries the rest forward from
+// the previous file — so a single StoredAt covering both meant every Claude
+// refresh renewed the lease on provider data nobody had fetched. On a bar
+// sitting in a Claude pane the Codex number could then never expire, and was
+// observed frozen for over an hour while the endpoint had long since moved on.
 type Cached struct {
 	Snapshot  usage.Snapshot   `json:"snapshot"`
 	Providers []provider.Usage `json:"providers,omitempty"`
 	StoredAt  time.Time        `json:"stored_at"`
+	// ProvidersStoredAt is when Providers was last actually fetched. Absent in
+	// files written before the split, where the zero value reads as stale and
+	// costs one extra refresh — the safe direction.
+	ProvidersStoredAt time.Time `json:"providers_stored_at,omitempty"`
 }
 
-// Age reports how long ago the entry was written.
+// NewCached stamps both sections with the same time, for a write that follows a
+// refresh of everything.
+func NewCached(snap usage.Snapshot, providers []provider.Usage, now time.Time) Cached {
+	return Cached{Snapshot: snap, Providers: providers, StoredAt: now, ProvidersStoredAt: now}
+}
+
+// Age reports how long ago the snapshot section was written.
 func (c Cached) Age(now time.Time) time.Duration { return now.Sub(c.StoredAt) }
 
-// Fresh reports whether the entry is still within ttl.
+// Fresh reports whether the snapshot section is still within ttl.
 func (c Cached) Fresh(now time.Time, ttl time.Duration) bool {
 	return c.Age(now) < ttl
+}
+
+// ProvidersFresh reports whether the provider section is still within ttl. A
+// zero timestamp is stale, so a pre-split file refetches once and then carries
+// its own timestamp.
+func (c Cached) ProvidersFresh(now time.Time, ttl time.Duration) bool {
+	if c.ProvidersStoredAt.IsZero() {
+		return false
+	}
+	return now.Sub(c.ProvidersStoredAt) < ttl
 }
 
 // ErrNoCache reports that no usable cache entry exists yet.
@@ -76,23 +103,30 @@ func ReadCache(path string) (Cached, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Cached{}, ErrNoCache
 	}
-	if c.StoredAt.IsZero() {
+	// Either section alone makes the file worth keeping: a first run that only
+	// asked for Codex writes providers with no snapshot, and discarding that
+	// would throw away the fetch it just paid for.
+	if c.StoredAt.IsZero() && c.ProvidersStoredAt.IsZero() {
 		return Cached{}, ErrNoCache
 	}
 	return c, nil
 }
 
-// WriteCache stores the snapshot atomically.
+// WriteCache stores the entry atomically.
+//
+// It takes the whole Cached rather than a timestamp, because the caller is the
+// only one that knows which sections it actually refreshed — see NewCached for
+// the everything-at-once case.
 //
 // Several panes can redraw at once, so a plain write could be observed
 // half-finished by a concurrent reader. Write to a temporary file in the same
 // directory and rename, which is atomic on POSIX. Mode 0600 because the
 // snapshot describes the account's quota.
-func WriteCache(path string, snap usage.Snapshot, providers []provider.Usage, now time.Time) error {
+func WriteCache(path string, c Cached) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	b, err := json.Marshal(Cached{Snapshot: snap, Providers: providers, StoredAt: now})
+	b, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
