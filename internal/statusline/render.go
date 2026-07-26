@@ -56,6 +56,9 @@ type Options struct {
 	CritAt float64 // default 85
 	// Reset shows the time remaining in the 5h window.
 	Reset bool
+	// Warning is appended after the segments, already formatted. Empty when
+	// there is nothing grounded to warn about.
+	Warning string
 	// Now is injected by tests. Zero means time.Now().
 	Now time.Time
 }
@@ -232,6 +235,9 @@ func renderCompact(groups []Group, o Options) string {
 	if o.Prefix != "" {
 		out = o.Prefix + " " + out
 	}
+	if o.Warning != "" {
+		out += " " + o.Colour.wrap(o.Warning, levelCrit)
+	}
 	return out
 }
 
@@ -269,6 +275,10 @@ func (o Options) level(util float64) colourLevel {
 		return levelOK
 	}
 }
+
+// ShortDuration is shortDuration, exported for callers that format their own
+// segments.
+func ShortDuration(d time.Duration) string { return shortDuration(d) }
 
 // shortDuration renders a duration the way a status bar wants it: "4d12h",
 // "2h12m", "45m". Two units at most, largest first.
