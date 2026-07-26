@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -519,5 +520,56 @@ func TestOpenCoreAtCreatesDataDir(t *testing.T) {
 	}
 	if c.store == nil || c.calc == nil || c.tasks == nil {
 		t.Fatal("expected store, calculator and tracker to be wired")
+	}
+}
+
+func TestUnknownCommandKeepsStdoutClean(t *testing.T) {
+	// A status bar runs `claudeops statusline` and renders whatever comes back
+	// on stdout. An older build that does not know the subcommand used to print
+	// the entire help text there, and it appeared in the status line.
+	//
+	// Help you asked for goes to stdout; help printed because something went
+	// wrong goes to stderr.
+	stdout, stderr := os.Stdout, os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout, os.Stderr = wOut, wErr
+
+	err := runArgs([]string{"definitely-not-a-command"})
+
+	_ = wOut.Close()
+	_ = wErr.Close()
+	os.Stdout, os.Stderr = stdout, stderr
+
+	outBytes, _ := io.ReadAll(rOut)
+	errBytes, _ := io.ReadAll(rErr)
+
+	if err == nil {
+		t.Error("an unknown command should return an error")
+	}
+	if len(outBytes) != 0 {
+		t.Errorf("stdout must stay empty, got %q", string(outBytes))
+	}
+	if !strings.Contains(string(errBytes), "claudeops") {
+		t.Errorf("stderr should carry the help, got %q", string(errBytes))
+	}
+}
+
+func TestHelpCommandWritesToStdout(t *testing.T) {
+	stdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := runArgs([]string{"help"})
+
+	_ = w.Close()
+	os.Stdout = stdout
+	b, _ := io.ReadAll(r)
+
+	if err != nil {
+		t.Errorf("help should not error: %v", err)
+	}
+	if !strings.Contains(string(b), "claudeops") {
+		t.Errorf("help asked for belongs on stdout, got %q", string(b))
 	}
 }

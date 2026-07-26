@@ -93,13 +93,22 @@ func runArgs(args []string) error {
 		printHelp()
 		return nil
 	default:
-		printHelp()
+		fprintHelp(os.Stderr)
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
 }
 
-func printHelp() {
-	fmt.Println(`claudeops — local TUI for Claude Code usage tracking
+func printHelp() { fprintHelp(os.Stdout) }
+
+// fprintHelp writes the help text to w.
+//
+// Where it goes matters. Help you asked for belongs on stdout; help printed
+// because a command was not recognised belongs on stderr, or it lands in
+// whatever was reading the command's output. A status bar calling an older
+// build with an unknown subcommand rendered the entire help text into the
+// status line.
+func fprintHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, `claudeops — local TUI for Claude Code usage tracking
 
 Usage:
   claudeops                                     launch the dashboard TUI (default)
