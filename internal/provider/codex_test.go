@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -201,12 +202,70 @@ func TestCodexFetchUnauthorized(t *testing.T) {
 
 	c := &Codex{
 		AuthPath: writeAuth(t, `{"tokens":{"access_token":"tok"}}`),
-		UsageURL: srv.URL,
-		HTTP:     srv.Client(),
-		Now:      fixedNow,
+		// Pin the fallback at a path that does not exist. Left empty it resolves
+		// to the real ~/.local/share/opencode/auth.json, so the test would read
+		// the developer's own credentials and its result would depend on whether
+		// they happen to be signed in to opencode.
+		OpencodeAuthPath: filepath.Join(t.TempDir(), "absent.json"),
+		UsageURL:         srv.URL,
+		HTTP:             srv.Client(),
+		Now:              fixedNow,
 	}
-	if _, err := c.Fetch(context.Background()); err != ErrCodexAuthExpired {
+	// errors.Is, not ==: the error names which sources were rejected, so it is
+	// wrapped.
+	if _, err := c.Fetch(context.Background()); !errors.Is(err, ErrCodexAuthExpired) {
 		t.Errorf("Fetch err = %v, want ErrCodexAuthExpired", err)
+	}
+}
+
+func TestCodexFallsBackWhenFirstSourceIsRejected(t *testing.T) {
+	// The bug this guards: a stale ~/.codex/auth.json shadowed a working
+	// opencode session. The file existed and held a token, so the fallback never
+	// ran and the user was told to `codex login` while already signed in.
+	const goodToken = "opencode-token"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+goodToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000}}}`))
+	}))
+	defer srv.Close()
+
+	ocPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(ocPath, []byte(`{"openai":{"type":"oauth","access":"`+goodToken+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Codex{
+		AuthPath:         writeAuth(t, `{"tokens":{"access_token":"stale"}}`),
+		OpencodeAuthPath: ocPath,
+		UsageURL:         srv.URL,
+		HTTP:             srv.Client(),
+		Now:              fixedNow,
+	}
+	u, err := c.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("a rejected first source must not fail the fetch: %v", err)
+	}
+	if len(u.Windows) == 0 || u.Windows[0].Utilization != 12 {
+		t.Errorf("expected the opencode session's data, got %+v", u.Windows)
+	}
+}
+
+func TestCodexNoCredentialsIsDistinctFromRejected(t *testing.T) {
+	// "Nothing to try" and "everything was refused" need different remedies, so
+	// they are different errors.
+	c := &Codex{
+		AuthPath:         filepath.Join(t.TempDir(), "absent.json"),
+		OpencodeAuthPath: filepath.Join(t.TempDir(), "absent.json"),
+		UsageURL:         "http://127.0.0.1:1",
+		Now:              fixedNow,
+	}
+	_, err := c.Fetch(context.Background())
+	if !errors.Is(err, ErrCodexNoAuth) {
+		t.Errorf("got %v, want ErrCodexNoAuth", err)
 	}
 }
 
