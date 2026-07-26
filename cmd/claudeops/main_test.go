@@ -48,15 +48,29 @@ func captureStdout(t *testing.T, run func() error) string {
 
 func TestRunArgsDispatchesUpdateCommand(t *testing.T) {
 	called := false
+	var gotArgs []string
 	prev := runUpdateCommand
-	runUpdateCommand = func() error {
+	runUpdateCommand = func(args []string) error {
 		called = true
+		gotArgs = args
 		return nil
 	}
 	defer func() { runUpdateCommand = prev }()
 
 	if err := runArgs([]string{"update"}); err != nil {
 		t.Fatalf("runArgs(update): %v", err)
+	}
+	if len(gotArgs) != 0 {
+		t.Errorf("bare `update` should pass no flags, got %v", gotArgs)
+	}
+
+	// Flags have to reach the subcommand, or --check silently does nothing.
+	gotArgs = nil
+	if err := runArgs([]string{"update", "--check"}); err != nil {
+		t.Fatalf("runArgs(update --check): %v", err)
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != "--check" {
+		t.Errorf("flags not forwarded: %v", gotArgs)
 	}
 	if !called {
 		t.Fatal("expected update command to be called")
