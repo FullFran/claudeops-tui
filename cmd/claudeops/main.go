@@ -80,7 +80,7 @@ func runArgs(args []string) error {
 	case "reingest":
 		return runReingestCommand(args[1:])
 	case "update":
-		return runUpdateCommand()
+		return runUpdateCommand(args[1:])
 	case "hooks":
 		return runHooksCommand(args[1:])
 	case "push":
@@ -117,7 +117,7 @@ Usage:
   claudeops task list                           list all tasks
   claudeops ingest                              one-shot ingest of existing JSONL files
   claudeops reingest [--yes]                    rebuild the event store from source files (corrects pre-0.4 inflated usage)
-  claudeops update                              update the installed CLI
+  claudeops update [--check]                    update the CLI, or just report what is published
   claudeops hooks install                       register Claude Code hooks for live status
   claudeops hooks uninstall                     remove claudeops hooks from settings.json
   claudeops statusline [--color] [--reset]      one-line usage summary for a status bar

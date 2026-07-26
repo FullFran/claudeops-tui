@@ -9,6 +9,7 @@ Honest list of where ClaudeOps falls short or depends on fragile foundations. Re
 | Live ingestion only happens while the TUI is open | The collector runs inside the TUI process; there is no daemon. Run `claudeops ingest` (e.g. from cron) to catch up without opening the dashboard — offsets are persisted, so nothing is double-counted. |
 | No threshold alerts | The dashboard color-codes daily spend against `daily_warn_eur` / `daily_alert_eur`, but nothing notifies you |
 | No multi-device sync | Everything is local to one machine; there is no per-device hostname or user attribution |
+| No auto-update on launch | `claudeops update` is a command you run; nothing checks for you in the background. `claudeops update --check` reports without installing |
 | Burn rate is descriptive, not predictive | The widget reports cost/hour over the last 4h; it does not forecast quota exhaustion |
 | Calendar tab never shipped | `[tabs] calendar` and the `[calendar]` config section are still written to `config.toml` but have no effect. The 7th tab is Classroom. |
 
