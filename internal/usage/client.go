@@ -90,6 +90,12 @@ type Client struct {
 	CredsPath  string
 	HTTP       *http.Client
 	CacheTTL   time.Duration
+
+	// DiskCachePath, when set, shares the snapshot across processes. Without it
+	// each consumer polls the endpoint on its own schedule and the rates add up:
+	// a status bar respawning per redraw never reuses its in-process cache at
+	// all. Empty keeps the old behaviour.
+	DiskCachePath string
 	// DefaultBackoff is used when the server returns 429/5xx without a
 	// Retry-After header. Anthropic's undocumented usage endpoint is shared
 	// with Claude Code itself, so the safest default is conservative.
@@ -172,6 +178,15 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 		return snap, err
 	}
 
+	// Then the shared cache, which another process may have refreshed. This is
+	// what makes opening the dashboard free while a status bar is running.
+	if snap, ok := c.readDisk(time.Now(), c.CacheTTL); ok {
+		c.mu.Lock()
+		c.cached = &snap
+		c.mu.Unlock()
+		return snap, nil
+	}
+
 	creds, err := c.credentials(ctx, "")
 	if errors.Is(err, ErrNoOAuth) {
 		return Snapshot{}, ErrUsageUnavailable
@@ -215,6 +230,9 @@ func (c *Client) Get(ctx context.Context) (Snapshot, error) {
 	c.cachedErr = nil
 	c.cachedErrUntil = time.Time{}
 	c.mu.Unlock()
+	// Publish for other processes. Best effort: the snapshot is already in hand
+	// and a failed write only costs an earlier refresh next time.
+	c.writeDisk(snap, snap.FetchedAt)
 	return snap, nil
 }
 

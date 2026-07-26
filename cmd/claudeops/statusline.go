@@ -131,7 +131,7 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	}
 
 	if fetch == nil {
-		fetch = usage.New(p.ClaudeCreds)
+		fetch = newSharedUsageClient(p, *ttl)
 	}
 	if registry == nil {
 		registry = defaultRegistry(p)
@@ -139,16 +139,36 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	snap, snapErr := fetch.Get(ctx)
+	// Only ask the sources that can answer. Fetching every provider to render
+	// one of them wastes a request against each of the others' rate limits, and
+	// makes the command as slow as the slowest service you do not care about.
+	wantClaude := want == statusline.ProviderAll || strings.EqualFold(want, statusline.ClaudeProvider)
+	wantRegistry := want != statusline.ClaudeProvider
+
+	var (
+		snap    usage.Snapshot
+		snapErr error
+	)
+	if wantClaude {
+		snap, snapErr = fetch.Get(ctx)
+	} else if haveCache {
+		// Not asked for, but keep the cached copy alive so selecting it later
+		// does not start from nothing.
+		snap = cached.Snapshot
+	}
 
 	// Registry providers are independent of Anthropic and of each other; one
 	// failing must not hide the rest. Errors are dropped rather than cached, so
 	// a provider that is merely logged-out disappears instead of sticking.
 	var usages []provider.Usage
-	for _, r := range registry.FetchAll(ctx) {
-		if r.Err == nil && len(r.Usage.Windows) > 0 {
-			usages = append(usages, r.Usage)
+	if wantRegistry {
+		for _, r := range registry.FetchAll(ctx) {
+			if r.Err == nil && len(r.Usage.Windows) > 0 {
+				usages = append(usages, r.Usage)
+			}
 		}
+	} else if haveCache {
+		usages = cached.Providers
 	}
 
 	if snapErr != nil && len(usages) == 0 {
@@ -212,6 +232,18 @@ func resolveAuto(s config.Settings) string {
 		return name
 	}
 	return statusline.ClaudeProvider
+}
+
+// newSharedUsageClient builds a client backed by the cache the TUI also uses,
+// so a status bar and an open dashboard cost one refresh between them rather
+// than one each.
+func newSharedUsageClient(p config.Paths, ttl time.Duration) *usage.Client {
+	c := usage.New(p.ClaudeCreds)
+	c.DiskCachePath = p.SnapshotCachePath
+	if ttl > 0 {
+		c.CacheTTL = ttl
+	}
+	return c
 }
 
 func defaultRegistry(p config.Paths) *provider.Registry {

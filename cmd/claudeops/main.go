@@ -402,6 +402,9 @@ func wirePricingWarnings(c *core, send func(tea.Msg)) {
 // the paths the TUI needs to read config and live session sidecars.
 func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model {
 	uClient := usage.New(p.ClaudeCreds)
+	// Share the snapshot with any other consumer, notably `claudeops statusline`
+	// running from a status bar. Without this the two poll independently.
+	uClient.DiskCachePath = p.SnapshotCachePath
 	if settings.Usage.CacheTTLSeconds > 0 {
 		uClient.CacheTTL = time.Duration(settings.Usage.CacheTTLSeconds) * time.Second
 	}
