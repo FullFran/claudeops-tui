@@ -10,7 +10,7 @@ Honest list of where ClaudeOps falls short or depends on fragile foundations. Re
 | No threshold alerts | The dashboard color-codes daily spend against `daily_warn_eur` / `daily_alert_eur`, but nothing notifies you |
 | No multi-device sync | Everything is local to one machine; there is no per-device hostname or user attribution |
 | No auto-update on launch | `claudeops update` is a command you run; nothing checks for you in the background. `claudeops update --check` reports without installing |
-| Burn rate is descriptive, not predictive | The widget reports cost/hour over the last 4h; it does not forecast quota exhaustion |
+| Burn rate is descriptive, not predictive | The dashboard widget reports cost/hour over the last 4h. `claudeops statusline --forecast` does project quota exhaustion, but from observed utilisation rather than from spend — the two are different axes and converting between them would mean guessing |
 | Calendar tab never shipped | `[tabs] calendar` and the `[calendar]` config section are still written to `config.toml` but have no effect. The 7th tab is Classroom. |
 
 ## Fragile dependencies
@@ -24,6 +24,13 @@ guessed quotas (that's what every other tool does and it's why they mislead).
 There is no on/off config flag: the dashboard widget is toggled with
 `[dashboard] show_subscription`, and the poll interval with
 `[usage] cache_ttl_seconds` (default 300).
+
+The snapshot is cached on disk at `~/.claudeops/snapshot-cache.json` and shared
+between processes, so the dashboard, `claudeops statusline` and the opencode
+plugin cost one refresh between them rather than one each. That file also holds
+a short series of observed utilisation, which is what `--forecast` projects
+from. The status line keeps its own `usage-cache.json` for registry providers
+and its stale fallback.
 
 ### JSONL format drift
 

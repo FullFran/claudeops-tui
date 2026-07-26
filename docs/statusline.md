@@ -126,6 +126,35 @@ A status bar is not where you want to discover that a token expired, so:
 
 Every one of these ends with an empty segment rather than an error in your bar.
 
+## Forecasting
+
+`--forecast` appends a warning when a window is on course to hit 100% **before it
+resets**:
+
+```console
+$ claudeops statusline --forecast
+5h 62% · 7d 29% ⚠5h out in 1h20m
+```
+
+It projects from **observed utilisation**, not from the euro burn rate the
+dashboard shows. Those are different axes — one is Anthropic's accounting of the
+window, the other your local estimate against an editable price table — and
+converting between them would mean guessing the exchange rate, which is exactly
+the estimation this project refuses to do.
+
+So it measures instead. Every refresh appends a sample to the shared cache, and
+the slope comes from what actually happened.
+
+That means it says nothing until it has something to say:
+
+- fewer than two samples, or less than ten minutes between them
+- flat or falling usage
+- a window already at 100%
+- a reset that lands before exhaustion would
+
+A number that shows up only when it is grounded is worth more than one that is
+always there.
+
 ## Colour outside tmux
 
 tmux colour escapes are `#[fg=...]`, which nothing else understands — emitted
@@ -216,6 +245,7 @@ The on-disk cache makes this cheap enough to run on every prompt.
 | `--labels` | off | prefix each group with its provider name |
 | `--prefix` | none | text before the output, emitted only when there is output |
 | `--reset` | off | append the time left in the first window |
+| `--forecast` | off | warn when a window is on course to run out before it resets |
 | `--ttl` | `1m` | how long a cached snapshot is reused |
 | `--refresh` | off | ignore the cache and fetch now |
 | `--timeout` | `3s` | budget for a live fetch |

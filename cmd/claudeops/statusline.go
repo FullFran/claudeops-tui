@@ -72,11 +72,13 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	var (
 		prov = fs.String("provider", "",
 			`which quota to show: a name, "all", or "auto" to follow the active pane (default: config)`)
-		format  = fs.String("format", "compact", "output format: compact, plain or json")
-		colour  statusline.ColourMode
-		labels  = fs.Bool("labels", false, "prefix each group with its provider name")
-		prefix  = fs.String("prefix", "", "text emitted before the output, only when there is output")
-		reset   = fs.Bool("reset", false, "append the time left in the first window")
+		format   = fs.String("format", "compact", "output format: compact, plain or json")
+		colour   statusline.ColourMode
+		labels   = fs.Bool("labels", false, "prefix each group with its provider name")
+		prefix   = fs.String("prefix", "", "text emitted before the output, only when there is output")
+		reset    = fs.Bool("reset", false, "append the time left in the first window")
+		forecast = fs.Bool("forecast", false,
+			"warn when a window is on course to run out before it resets (needs ~10 min of observation)")
 		refresh = fs.Bool("refresh", false, "ignore the cache and fetch now")
 		ttl     = fs.Duration("ttl", statusline.DefaultTTL, "how long a cached snapshot is reused")
 		timeout = fs.Duration("timeout", 3*time.Second, "budget for a live fetch")
@@ -127,6 +129,9 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	cached, cacheErr := statusline.ReadCache(p.UsageCachePath)
 	haveCache := cacheErr == nil
 	if haveCache && !*refresh && cached.Fresh(now, *ttl) {
+		if *forecast {
+			opts.Warning = exhaustionWarning(p, cached.Snapshot, now)
+		}
 		return emit(out, cached.Snapshot, cached.Providers, opts)
 	}
 
@@ -188,6 +193,9 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	// A cache write failure is not worth failing the render over — the numbers
 	// are already in hand, and the only cost is fetching again next time.
 	_ = statusline.WriteCache(p.UsageCachePath, snap, usages, now)
+	if *forecast {
+		opts.Warning = exhaustionWarning(p, snap, now)
+	}
 	return emit(out, snap, usages, opts)
 }
 
@@ -244,6 +252,30 @@ func newSharedUsageClient(p config.Paths, ttl time.Duration) *usage.Client {
 		c.CacheTTL = ttl
 	}
 	return c
+}
+
+// exhaustionWarning names the soonest window on course to run out before it
+// resets. Empty when nothing is, or when there is not enough observed history
+// to say — a forecast that appears only when it is grounded is worth more than
+// one that is always there.
+func exhaustionWarning(p config.Paths, snap usage.Snapshot, now time.Time) string {
+	c := usage.New(p.ClaudeCreds)
+	c.DiskCachePath = p.SnapshotCachePath
+
+	var soonest *usage.Forecast
+	for _, f := range c.Forecasts(snap, now) {
+		if !f.BeforeReset {
+			continue
+		}
+		if soonest == nil || f.ExhaustedIn < soonest.ExhaustedIn {
+			cp := f
+			soonest = &cp
+		}
+	}
+	if soonest == nil {
+		return ""
+	}
+	return "⚠" + soonest.Label + " out in " + statusline.ShortDuration(soonest.ExhaustedIn)
 }
 
 func defaultRegistry(p config.Paths) *provider.Registry {

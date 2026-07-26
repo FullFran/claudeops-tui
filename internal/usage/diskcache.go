@@ -27,6 +27,11 @@ import (
 type diskEntry struct {
 	Snapshot Snapshot  `json:"snapshot"`
 	StoredAt time.Time `json:"stored_at"`
+	// History accumulates what utilisation actually did over time. It lives
+	// here because this file is already written on every refresh and shared
+	// between processes, so the samples come for free and every consumer sees
+	// the same series.
+	History History `json:"history,omitempty"`
 }
 
 // readDisk returns the cached snapshot when one exists and is within ttl.
@@ -66,11 +71,14 @@ func (c *Client) writeDisk(snap Snapshot, now time.Time) {
 	if c.DiskCachePath == "" {
 		return
 	}
+	// Carry the existing series forward and extend it.
+	hist := c.readHistory()
+	hist.Record(snap, now)
 	dir := filepath.Dir(c.DiskCachePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	b, err := json.Marshal(diskEntry{Snapshot: snap, StoredAt: now})
+	b, err := json.Marshal(diskEntry{Snapshot: snap, StoredAt: now, History: hist})
 	if err != nil {
 		return
 	}
@@ -95,6 +103,28 @@ func (c *Client) writeDisk(snap Snapshot, now time.Time) {
 	// A failed write is not worth reporting: the snapshot is already in hand and
 	// the only cost is fetching again sooner.
 	_ = os.Rename(tmpName, c.DiskCachePath)
+}
+
+// readHistory loads the recorded series, or an empty one.
+func (c *Client) readHistory() History {
+	if c.DiskCachePath == "" {
+		return History{}
+	}
+	b, err := os.ReadFile(c.DiskCachePath)
+	if err != nil {
+		return History{}
+	}
+	var e diskEntry
+	if err := json.Unmarshal(b, &e); err != nil {
+		return History{}
+	}
+	return e.History
+}
+
+// Forecasts projects quota exhaustion from the recorded series. Empty when
+// there is not enough observed signal to be honest about it.
+func (c *Client) Forecasts(snap Snapshot, now time.Time) []Forecast {
+	return c.readHistory().Forecasts(snap, now)
 }
 
 // DiskAge reports how old the shared cache is, or false when there is none.

@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -467,5 +469,63 @@ func TestStatuslineKeepsCachedDataForSourcesItSkipped(t *testing.T) {
 	}
 	if len(c.Providers) != 1 {
 		t.Errorf("cached provider data was dropped: %+v", c.Providers)
+	}
+}
+
+func TestStatuslineForecastWarnsOnlyWhenGrounded(t *testing.T) {
+	// The warning has to come from observed history, not from the current
+	// reading, so the test writes a series the way a running client would.
+	now := time.Now()
+	p := config.ForHome(t.TempDir())
+
+	writeHistory := func(from, to float64, span time.Duration, resetsIn time.Duration) {
+		c := usage.New(p.ClaudeCreds)
+		c.DiskCachePath = p.SnapshotCachePath
+		var h usage.History
+		h.Record(usage.Snapshot{FiveHour: &usage.Bucket{Utilization: from}}, now.Add(-span))
+		h.Record(usage.Snapshot{FiveHour: &usage.Bucket{Utilization: to}}, now)
+		writeSnapshotCache(t, p.SnapshotCachePath, h, now)
+		_ = resetsIn
+	}
+
+	// Rising fast, window resets far away → worth warning.
+	writeHistory(10, 30, time.Hour, 5*time.Hour)
+	snap := usage.Snapshot{FiveHour: &usage.Bucket{Utilization: 30, ResetsAt: now.Add(5 * time.Hour)}}
+	if w := exhaustionWarning(p, snap, now); w == "" {
+		t.Error("a window on course to run out before its reset should warn")
+	} else if !strings.Contains(w, "5h") {
+		t.Errorf("the warning should name the window: %q", w)
+	}
+
+	// Same rate, but the reset lands first → no warning.
+	snapSoon := usage.Snapshot{FiveHour: &usage.Bucket{Utilization: 30, ResetsAt: now.Add(30 * time.Minute)}}
+	if w := exhaustionWarning(p, snapSoon, now); w != "" {
+		t.Errorf("a reset that lands first is not a problem, got %q", w)
+	}
+
+	// No history at all → silence, not a guess.
+	empty := config.ForHome(t.TempDir())
+	if w := exhaustionWarning(empty, snap, now); w != "" {
+		t.Errorf("without observation there is nothing to say, got %q", w)
+	}
+}
+
+// writeSnapshotCache seeds the shared cache the way usage.Client would.
+func writeSnapshotCache(t *testing.T, path string, h usage.History, now time.Time) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entry := map[string]any{
+		"snapshot":  usage.Snapshot{},
+		"stored_at": now,
+		"history":   h,
+	}
+	b, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
