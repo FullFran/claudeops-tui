@@ -17,6 +17,11 @@ Point opencode at the file, in `opencode.json`:
 
 or copy it into `~/.config/opencode/plugins/`.
 
+The `@jsxImportSource` pragma on line 1 is load-bearing — a `.tsx` dropped into
+the plugins directory is otherwise compiled with the runtime's default JSX
+factory, which is React, and the elements here would fail to resolve. Keep it if
+you copy the file around.
+
 It needs `claudeops` on `PATH` — see the [status line docs](../../docs/statusline.md).
 
 ## Options
