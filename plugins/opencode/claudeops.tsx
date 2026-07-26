@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 /**
  * claudeops — opencode TUI plugin
  *
@@ -14,6 +15,11 @@
  * Install:
  *   plugin: ["claudeops/plugins/opencode/claudeops.tsx"]   in opencode.json
  * or drop it in ~/.config/opencode/plugins/.
+ *
+ * The jsxImportSource pragma above is load-bearing. A .tsx file dropped into the
+ * plugins directory is compiled with whatever default the runtime has, which is
+ * React — the JSX here would fail to resolve. The pragma keeps the file
+ * self-contained rather than depending on a tsconfig the user has to supply.
  */
 import type { TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { createSignal, onCleanup } from "solid-js"
