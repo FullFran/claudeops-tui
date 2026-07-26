@@ -23,6 +23,40 @@ The binary lands in `$(go env GOPATH)/bin` (usually `~/go/bin`), which must be o
 your `PATH` for a status bar to find it. If you already run the TUI, you already
 have it — check with `claudeops statusline --refresh`.
 
+## Turning it on and off
+
+The status line is on by default. To stop it rendering without touching your bar
+config:
+
+```console
+$ claudeops statusline disable
+statusline disabled (/home/you/.claudeops/config.toml)
+
+$ claudeops statusline
+                          # nothing, exit 0
+
+$ claudeops statusline status
+statusline: disabled
+provider:   auto
+config:     /home/you/.claudeops/config.toml
+
+$ claudeops statusline enable
+statusline enabled (/home/you/.claudeops/config.toml)
+```
+
+Disabled short-circuits before any work: no network, no cache read. Your bar can
+keep calling the command and simply shows an empty segment, so there is nothing
+to comment out and no reload to remember.
+
+It is the `enabled` key under `[statusline]`, so editing the file by hand works
+too. A config written before that key existed has no `[statusline]` section at
+all; that counts as enabled, and nothing changes for you on upgrade.
+
+Note that `enable`/`disable` rewrite `config.toml` the same way the TUI does when
+you change a setting there: the file is regenerated from your merged settings, so
+keys you never set appear with their defaults and keys no longer recognised are
+dropped.
+
 ## Which quota it shows
 
 By default it **follows the agent in the pane you are looking at**. A Claude Code
@@ -91,6 +125,37 @@ A status bar is not where you want to discover that a token expired, so:
   omitted rather than rendered as zeroes.
 
 Every one of these ends with an empty segment rather than an error in your bar.
+
+## Colour outside tmux
+
+tmux colour escapes are `#[fg=...]`, which nothing else understands — emitted
+into a Zellij bar or a shell prompt they show up as literal text next to the
+number. So `--color` picks the syntax for where it is running:
+
+| Value | Emits |
+|---|---|
+| `--color` | tmux syntax inside tmux, ANSI everywhere else |
+| `--color=tmux` | tmux syntax, always |
+| `--color=ansi` | 24-bit SGR, always |
+| `--color=none` | no escapes (the default) |
+
+Detection is `$TMUX`, so a bare `--color` is the right answer almost everywhere.
+Force a mode when you are piping output somewhere that does not share the
+environment — a daemon writing a file, say.
+
+## Without tmux
+
+Nothing here requires tmux. The pieces that touch it degrade rather than fail:
+
+| Situation | Behaviour |
+|---|---|
+| Not running under tmux | `--provider auto` falls back to `claude`; pin a provider or set one in config to be explicit |
+| tmux not installed at all | the same, the lookup simply finds nothing |
+| `--color` outside tmux | ANSI, not tmux escapes |
+
+Agent detection is the only feature that genuinely needs tmux, because it asks
+which pane you are looking at. Outside tmux there is no such question, so set
+`provider` in config to the service you actually use.
 
 ## tmux
 

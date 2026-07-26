@@ -45,13 +45,33 @@ func cmdStatusline(args []string) error {
 func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snapshotFetcher, registry registryFetcher) error {
 	settings, _ := config.Load(p.ConfigPath) // missing file yields defaults
 
+	// Subcommands come before flags so `statusline disable` reads naturally and
+	// cannot be confused with a value for some flag.
+	if len(args) > 0 {
+		switch args[0] {
+		case "enable":
+			return setStatuslineEnabled(p, out, true)
+		case "disable":
+			return setStatuslineEnabled(p, out, false)
+		case "status":
+			state := "disabled"
+			if settings.Statusline.IsEnabled() {
+				state = "enabled"
+			}
+			_, _ = fmt.Fprintf(out, "statusline: %s\n", state)
+			_, _ = fmt.Fprintf(out, "provider:   %s\n", providerOrDefault(settings))
+			_, _ = fmt.Fprintf(out, "config:     %s\n", p.ConfigPath)
+			return nil
+		}
+	}
+
 	fs := flag.NewFlagSet("statusline", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var (
 		prov = fs.String("provider", "",
 			`which quota to show: a name, "all", or "auto" to follow the active pane (default: config)`)
 		format  = fs.String("format", "compact", "output format: compact, plain or json")
-		color   = fs.Bool("color", false, "wrap compact output in tmux colour escapes")
+		colour  statusline.ColourMode
 		labels  = fs.Bool("labels", false, "prefix each group with its provider name")
 		prefix  = fs.String("prefix", "", "text emitted before the output, only when there is output")
 		reset   = fs.Bool("reset", false, "append the time left in the first window")
@@ -61,8 +81,17 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		warnAt  = fs.Float64("warn-at", 60, "utilisation percentage that turns the segment amber")
 		critAt  = fs.Float64("crit-at", 85, "utilisation percentage that turns the segment red")
 	)
+	fs.Var(statusline.ColourFlagValue(&colour), "color",
+		"colourise output: none, auto, tmux or ansi (bare --color means auto)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// A disabled status line prints nothing and exits zero, so a bar can keep
+	// calling it and simply show an empty segment. Checked before any work:
+	// disabled means no network, no cache read, nothing.
+	if !settings.Statusline.IsEnabled() {
+		return nil
 	}
 
 	// Precedence: flag, then config, then "auto". An empty flag value is what
@@ -84,7 +113,7 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		Provider:   want,
 		ShowLabels: *labels,
 		Prefix:     *prefix,
-		Color:      *color,
+		Colour:     colour,
 		Reset:      *reset,
 		WarnAt:     *warnAt,
 		CritAt:     *critAt,
@@ -143,6 +172,39 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 // resolveAuto picks a provider from the agent in the active tmux pane, falling
 // back to Anthropic when there is nothing to go on — outside tmux, or in a pane
 // running something we do not recognise.
+// setStatuslineEnabled flips the config key and persists it.
+//
+// It writes the whole settings file, which is how config.Save works elsewhere
+// in this command set: the file is rewritten from the merged defaults, so keys
+// the user never set appear with their default rather than vanishing.
+func setStatuslineEnabled(p config.Paths, out io.Writer, on bool) error {
+	settings, err := config.Load(p.ConfigPath)
+	if err != nil {
+		return err
+	}
+	settings.Statusline.Enabled = &on
+	if err := config.Save(p.ConfigPath, settings); err != nil {
+		return err
+	}
+	state := "disabled"
+	if on {
+		state = "enabled"
+	}
+	_, _ = fmt.Fprintf(out, "statusline %s (%s)\n", state, p.ConfigPath)
+	if on {
+		_, _ = fmt.Fprintln(out, "add this to your status bar if you have not already:")
+		_, _ = fmt.Fprintln(out, `  #(command -v claudeops >/dev/null && claudeops statusline --color)`)
+	}
+	return nil
+}
+
+func providerOrDefault(s config.Settings) string {
+	if v := strings.TrimSpace(s.Statusline.Provider); v != "" {
+		return v
+	}
+	return statusline.ProviderAuto
+}
+
 func resolveAuto(s config.Settings) string {
 	if name := statusline.DetectAgent(s.Statusline.Agents); name != "" {
 		return name

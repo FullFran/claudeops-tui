@@ -48,9 +48,9 @@ type Options struct {
 	// something to show. A status bar with a label but no value reads as
 	// broken, so an empty render stays empty.
 	Prefix string
-	// Color wraps compact output in tmux style escapes. Off by default so the
-	// output stays usable in bars that do not speak tmux formatting.
-	Color bool
+	// Colour selects the escape syntax. Off by default so the output stays
+	// usable anywhere; see ColourMode for why tmux and ANSI cannot be the same.
+	Colour ColourMode
 	// Threshold percentages at which compact output switches colour.
 	WarnAt float64 // default 60
 	CritAt float64 // default 85
@@ -207,10 +207,7 @@ func renderCompact(groups []Group, o Options) string {
 			segs = append(segs, g.Provider)
 		}
 		for _, w := range g.Windows {
-			seg := fmt.Sprintf("%s %.0f%%", w.Label, w.Utilization)
-			if o.Color {
-				seg = fmt.Sprintf("#[fg=%s]%s%s", colourFor(w.Utilization, o), seg, colourOff)
-			}
+			seg := o.Colour.wrap(fmt.Sprintf("%s %.0f%%", w.Label, w.Utilization), o.level(w.Utilization))
 			segs = append(segs, seg)
 		}
 		if o.Reset && len(g.Windows) > 0 {
@@ -261,14 +258,15 @@ func renderPlain(groups []Group, o Options) string {
 	return sb.String()
 }
 
-func colourFor(util float64, o Options) string {
+// level classifies a utilisation against the configured thresholds.
+func (o Options) level(util float64) colourLevel {
 	switch {
 	case util >= o.critAt():
-		return colourCrit
+		return levelCrit
 	case util >= o.warnAt():
-		return colourWarn
+		return levelWarn
 	default:
-		return colourOK
+		return levelOK
 	}
 }
 

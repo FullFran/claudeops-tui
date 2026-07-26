@@ -112,7 +112,7 @@ func TestRenderCompactColour(t *testing.T) {
 	}
 	for _, tc := range cases {
 		snap := usage.Snapshot{FiveHour: bucket(tc.util, time.Hour)}
-		got, err := Render(snap, nil, Options{Color: true, Now: fixedNow})
+		got, err := Render(snap, nil, Options{Colour: ColourTmux, Now: fixedNow})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +127,7 @@ func TestRenderCompactColour(t *testing.T) {
 
 func TestRenderCompactCustomThresholds(t *testing.T) {
 	snap := usage.Snapshot{FiveHour: bucket(50, time.Hour)}
-	got, err := Render(snap, nil, Options{Color: true, WarnAt: 40, CritAt: 90, Now: fixedNow})
+	got, err := Render(snap, nil, Options{Colour: ColourTmux, WarnAt: 40, CritAt: 90, Now: fixedNow})
 	if err != nil {
 		t.Fatal(err)
 	}
