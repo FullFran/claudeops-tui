@@ -572,6 +572,12 @@
     </div>
 
     <div class="reveal" style="margin-top:2rem">
+      <p class="section-lead" data-es="Y puede avisarte antes de que te quedes sin cuota. La proyección sale de la utilización observada, no del gasto en euros: son ejes distintos y convertir entre ellos sería adivinar. Si no hay suficiente historial para afirmarlo, no dice nada.">It can also warn you before you run out. The projection comes from observed utilisation, not from euro spend — those are different axes, and converting between them would be guessing. With too little history to be sure, it says nothing at all.</p>
+      <div class="code-block"><span class="p">$</span> claudeops statusline --forecast
+<span class="c-green">5h 62%</span> · <span class="c-green">7d 29%</span> <span style="color:#f7768e">⚠5h out in 1h20m</span></div>
+    </div>
+
+    <div class="reveal" style="margin-top:2rem">
       <p class="section-lead" data-es="No consulta la API en cada refresco. El snapshot se cachea en disco y lo comparten todos los procesos, así que una barra redibujándose cada dos segundos hace una petición por minuto, no treinta — y abrir el dashboard a la vez no cuesta nada.">It does not call the API on every redraw. The snapshot is cached on disk and shared between processes, so a bar redrawing every two seconds makes one request a minute rather than thirty — and opening the dashboard alongside it costs nothing.</p>
       <div class="code-block"><span class="p">$</span> claudeops statusline doctor
 <span class="c-dim">claude    </span><span class="c-green">ok    </span><span class="c-dim">  5h 3% · 7d 29%</span>

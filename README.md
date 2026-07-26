@@ -322,6 +322,14 @@ Anthropic window, an opencode pane wired to OpenAI shows the Codex one — and i
 serves an on-disk cache so a bar redrawing every couple of seconds makes one
 request a minute rather than thirty.
 
+`--forecast` adds a warning when a window is on course to run out before it
+resets, projected from observed utilisation rather than from spend:
+
+```console
+$ claudeops statusline --forecast
+5h 62% · 7d 29% ⚠5h out in 1h20m
+```
+
 Full reference, including the agent mapping, Zellij and shell prompts, and how to
 switch provider from a keybinding: [`docs/statusline.md`](./docs/statusline.md).
 
