@@ -166,7 +166,7 @@ func TestStatuslineFormats(t *testing.T) {
 	}{
 		{args: []string{"--format", "json"}, want: `"provider":"claude"`},
 		{args: []string{"--format", "plain"}, want: "5h"},
-		{args: []string{"--color"}, want: "#[fg="},
+		{args: []string{"--color=tmux"}, want: "#[fg="},
 	}
 	for _, tc := range cases {
 		p := config.ForHome(t.TempDir())
@@ -287,4 +287,115 @@ type failingRegistry struct{}
 
 func (failingRegistry) FetchAll(context.Context) []provider.Result {
 	return []provider.Result{{Name: "Codex", Err: errors.New("token rejected")}}
+}
+
+func TestStatuslineDisabledPrintsNothing(t *testing.T) {
+	// Disabled must short-circuit before any work: no fetch, no cache read.
+	p := config.ForHome(t.TempDir())
+	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.ConfigPath, []byte("[statusline]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeFetcher{snap: snapAt(42)}
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, nil, f, emptyRegistry{}); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("disabled should print nothing, got %q", out.String())
+	}
+	if f.calls != 0 {
+		t.Errorf("disabled should not fetch, got %d calls", f.calls)
+	}
+}
+
+func TestStatuslineEnabledByDefaultForOldConfigs(t *testing.T) {
+	// A config file written before the key existed has no [statusline] section.
+	// That must keep working rather than silently turning the feature off.
+	p := config.ForHome(t.TempDir())
+	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.ConfigPath, []byte("[usage]\ncache_ttl_seconds = 300\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, nil, &fakeFetcher{snap: snapAt(42)}, emptyRegistry{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != "5h 42%" {
+		t.Errorf("got %q, expected the status line to render", out.String())
+	}
+}
+
+func TestStatuslineEnableDisableRoundTrip(t *testing.T) {
+	p := config.ForHome(t.TempDir())
+	var out bytes.Buffer
+
+	if err := cmdStatuslineWith(p, &out, []string{"disable"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := cmdStatuslineWith(p, &out, nil, &fakeFetcher{snap: snapAt(42)}, emptyRegistry{}); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("after disable, got %q", out.String())
+	}
+
+	out.Reset()
+	if err := cmdStatuslineWith(p, &out, []string{"enable"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := cmdStatuslineWith(p, &out, nil, &fakeFetcher{snap: snapAt(42)}, emptyRegistry{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != "5h 42%" {
+		t.Errorf("after enable, got %q", out.String())
+	}
+}
+
+func TestStatuslineToggleKeepsOtherSettings(t *testing.T) {
+	// Writing the config must not clobber unrelated keys the user set.
+	p := config.ForHome(t.TempDir())
+	if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "[usage]\ncache_ttl_seconds = 42\n\n[statusline]\nprovider = \"codex\"\n"
+	if err := os.WriteFile(p.ConfigPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, []string{"disable"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	after, err := config.Load(p.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Usage.CacheTTLSeconds != 42 {
+		t.Errorf("unrelated setting lost: cache_ttl_seconds = %d", after.Usage.CacheTTLSeconds)
+	}
+	if after.Statusline.Provider != "codex" {
+		t.Errorf("provider lost: %q", after.Statusline.Provider)
+	}
+	if after.Statusline.IsEnabled() {
+		t.Error("disable did not persist")
+	}
+}
+
+func TestStatuslineStatusSubcommand(t *testing.T) {
+	p := config.ForHome(t.TempDir())
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, []string{"status"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"enabled", "provider:", "config:"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status output missing %q:\n%s", want, out.String())
+		}
+	}
 }

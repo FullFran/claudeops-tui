@@ -97,6 +97,11 @@ type UsageSettings struct {
 
 // StatuslineSettings controls `claudeops statusline`.
 type StatuslineSettings struct {
+	// Enabled gates the whole command. When false it prints nothing and exits
+	// zero, so a status bar can keep calling it and simply show an empty
+	// segment — no config editing, no restart.
+	Enabled *bool `toml:"enabled"`
+
 	// Provider selects what the status line shows:
 	//   "auto"   follow the agent running in the active tmux pane
 	//   "all"    every provider with credentials
@@ -108,6 +113,13 @@ type StatuslineSettings struct {
 	// differs — an opencode pointed at Anthropic models should map to
 	// "claude", not "codex".
 	Agents map[string]string `toml:"agents"`
+}
+
+// IsEnabled reports whether the status line should render. A nil pointer means
+// the key is absent from the user's file, which is treated as enabled: the
+// feature is opt-out, and an old config predating the key must keep working.
+func (s StatuslineSettings) IsEnabled() bool {
+	return s.Enabled == nil || *s.Enabled
 }
 
 // DashboardSettings toggles individual widgets on the main dashboard tab.
@@ -172,6 +184,8 @@ type KeybindingsSettings struct {
 	CommandPalette string `toml:"command_palette"`
 }
 
+func boolPtr(b bool) *bool { return &b }
+
 // DefaultSettings returns a Settings struct with all widgets enabled and
 // sensible defaults. This is what gets written to disk on first run and what
 // every missing field falls back to.
@@ -224,6 +238,7 @@ func DefaultSettings() Settings {
 			CacheTTLSeconds: 300,
 		},
 		Statusline: StatuslineSettings{
+			Enabled:  boolPtr(true),
 			Provider: "auto",
 			Agents: map[string]string{
 				"claude":   "claude",

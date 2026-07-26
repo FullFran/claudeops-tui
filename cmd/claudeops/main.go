@@ -112,6 +112,8 @@ Usage:
   claudeops hooks install                       register Claude Code hooks for live status
   claudeops hooks uninstall                     remove claudeops hooks from settings.json
   claudeops statusline [--color] [--reset]      one-line usage summary for a status bar
+  claudeops statusline enable | disable         turn the status line on or off
+  claudeops statusline status                   show whether it is on, and which provider
   claudeops hooks status                        show which hooks are registered
   claudeops hooks handle                        handle a Claude Code hook event on stdin (invoked by Claude Code)
   claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
