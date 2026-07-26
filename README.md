@@ -118,6 +118,7 @@ claudeops task list
 claudeops ingest                 # one-shot ingest of existing source files
 claudeops reingest [--yes]       # rebuild the event store from source files
 claudeops update                 # update the installed CLI when safe
+claudeops update --check         # report what is published, install nothing
 claudeops hooks install          # register Claude Code hooks for live session state
 claudeops hooks uninstall        # remove claudeops hooks from settings.json
 claudeops hooks status           # show which hooks are registered

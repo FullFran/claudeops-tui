@@ -13,6 +13,9 @@ import (
 
 const InstallTarget = "github.com/fullfran/claudeops-tui/cmd/claudeops@latest"
 
+// ErrStaleRelease reports that the published version is older than this build.
+var ErrStaleRelease = errors.New("published release is older than the running build")
+
 var ErrManual = errors.New("manual update required")
 
 type Env struct {
@@ -69,6 +72,17 @@ type Decision struct {
 	ExecutablePath string
 	ExpectedPath   string
 	InstalledNow   string
+
+	// LatestVersion is what the module proxy reports, without the leading "v".
+	// Empty when the proxy could not be reached — that is not fatal, it just
+	// means the install has to go ahead blind, as it always used to.
+	LatestVersion string
+	// UpToDate is true when the published version is not newer than this one.
+	UpToDate bool
+	// Downgrade is true when the published version is OLDER. Installing then
+	// would replace a working binary with fewer features, which is exactly what
+	// happens to anyone running a build made between releases.
+	Downgrade bool
 }
 
 type Updater struct {
@@ -76,6 +90,8 @@ type Updater struct {
 	Version string
 	Target  string
 	Binary  string
+	// Fetcher resolves the newest published version. Nil uses the public proxy.
+	Fetcher LatestFetcher
 }
 
 func New(version string) Updater {
@@ -84,6 +100,7 @@ func New(version string) Updater {
 		Version: version,
 		Target:  InstallTarget,
 		Binary:  "claudeops",
+		Fetcher: ProxyFetcher{},
 	}
 }
 
@@ -92,6 +109,28 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 	decision := Decision{
 		CurrentVersion: u.Version,
 		InstallCommand: "go install " + u.Target,
+	}
+
+	// What is published is worth knowing even when this install cannot update
+	// itself — "there is a new version, here is the command" is still the
+	// answer. So resolve it before any of the early returns below.
+	//
+	// A proxy that cannot be reached is not an error. It leaves LatestVersion
+	// empty, and the install proceeds blind exactly as it always did.
+	if u.Fetcher != nil {
+		if rel, err := u.Fetcher.Latest(ctx); err == nil {
+			latest := strings.TrimPrefix(rel.Version, "v")
+			decision.LatestVersion = latest
+			switch {
+			case semverLT(u.Version, latest):
+				// newer is available; both flags stay false
+			case latest == u.Version:
+				decision.UpToDate = true
+			default:
+				decision.UpToDate = true
+				decision.Downgrade = true
+			}
+		}
 	}
 
 	execPath, err := u.Runner.Executable()
@@ -141,6 +180,19 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 	}
 	if !decision.CanAuto {
 		return decision, fmt.Errorf("%w: %s", ErrManual, decision.Reason)
+	}
+
+	// Stop before touching the binary. Installing to arrive at the version you
+	// already have is a slow no-op; installing an older one is destructive, and
+	// the old post-install check could only report that after the fact.
+	if decision.Downgrade {
+		return decision, fmt.Errorf(
+			"%w: the newest published version is %s, older than the %s you are running\n"+
+				"installing would remove whatever this build has that %s does not",
+			ErrStaleRelease, decision.LatestVersion, u.Version, decision.LatestVersion)
+	}
+	if decision.UpToDate {
+		return decision, nil
 	}
 
 	output, err := u.Runner.Run(ctx, "go", "install", u.Target)
