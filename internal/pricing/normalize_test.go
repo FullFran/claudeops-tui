@@ -117,3 +117,22 @@ func TestAllZeroLitellmEntriesStayUnpriced(t *testing.T) {
 		t.Errorf("CostFor(codestral-latest) = %v, want nil (unknown price)", *got)
 	}
 }
+
+func TestNormalizeStripsThinkingSuffix(t *testing.T) {
+	// Antigravity advertises a reasoning variant as a distinct id, but it bills
+	// as the model it wraps. Left alone it reaches no price table and the event
+	// lands with no cost at all — 44 of them did on one real install.
+	cases := []struct{ in, want string }{
+		{"google/antigravity-claude-opus-4-5-thinking", "claude-opus-4-5"},
+		{"claude-opus-4-5-thinking", "claude-opus-4-5"},
+		{"gemini-3-pro-thinking", "gemini-3-pro"},
+		// A model whose real name ends in "thinking" without the separator must
+		// survive: the suffix is "-thinking", not the word.
+		{"some-model-rethinking", "some-model-rethinking"},
+	}
+	for _, tc := range cases {
+		if got := NormalizeModelID(tc.in); got != tc.want {
+			t.Errorf("NormalizeModelID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
