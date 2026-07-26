@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,7 +18,10 @@ const DefaultCodexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
 
 // ErrCodexAuthExpired indicates the stored Codex OAuth token was rejected and
 // the user must re-authenticate the Codex CLI.
-var ErrCodexAuthExpired = errors.New("codex oauth token rejected; run `codex login`")
+var ErrCodexAuthExpired = errors.New("codex oauth token rejected; re-authenticate that source")
+
+// ErrCodexNoAuth indicates no Codex credential was found in any known store.
+var ErrCodexNoAuth = errors.New("no codex credentials; run `codex login` or sign in to openai via opencode")
 
 // codexAuth mirrors the relevant parts of ~/.codex/auth.json.
 type codexAuth struct {
@@ -99,24 +103,40 @@ func NewCodex() *Codex {
 	}
 }
 
-// creds resolves the Codex access token, preferring the native Codex CLI
-// auth.json and falling back to an `openai` OAuth session stored by opencode.
-func (c *Codex) creds() (codexCreds, error) {
+// credsList returns every usable Codex token, in preference order: the native
+// Codex CLI auth.json first, then an `openai` OAuth session stored by opencode.
+//
+// All of them, not just the first. Preferring one source and stopping there
+// meant a stale ~/.codex/auth.json shadowed a perfectly good opencode session —
+// the file exists and holds a token, so the fallback never ran, and the user was
+// told to `codex login` while already logged in through opencode. Presence is
+// not the same as validity, and only the endpoint can tell the difference.
+func (c *Codex) credsList() []codexCreds {
+	var out []codexCreds
 	if auth, err := c.loadAuth(); err == nil && auth.Tokens != nil && auth.Tokens.AccessToken != "" {
-		return codexCreds{
+		out = append(out, codexCreds{
 			AccessToken: auth.Tokens.AccessToken,
 			AccountID:   auth.Tokens.AccountID,
 			Source:      "codex-cli",
-		}, nil
+		})
 	}
 	if oc, err := LoadOpencodeAuth(c.OpencodeAuthPath); err == nil {
 		if e, ok := oc["openai"]; ok && e.Type == "oauth" && e.Access != "" {
-			return codexCreds{
+			out = append(out, codexCreds{
 				AccessToken: e.Access,
 				AccountID:   e.AccountID,
 				Source:      "opencode",
-			}, nil
+			})
 		}
+	}
+	return out
+}
+
+// creds returns the preferred token. Kept for Available, which only asks
+// whether any credential exists at all.
+func (c *Codex) creds() (codexCreds, error) {
+	if list := c.credsList(); len(list) > 0 {
+		return list[0], nil
 	}
 	return codexCreds{}, os.ErrNotExist
 }
@@ -145,12 +165,35 @@ func (c *Codex) Available() bool {
 }
 
 // Fetch retrieves and normalizes the Codex usage snapshot.
+//
+// Each credential source is tried in turn. A rejected token is not fatal while
+// another source remains: having both the Codex CLI and opencode logged in is
+// normal, and one of them going stale should not take the provider down.
 func (c *Codex) Fetch(ctx context.Context) (Usage, error) {
-	cr, err := c.creds()
-	if err != nil || cr.AccessToken == "" {
-		return Usage{}, ErrCodexAuthExpired
+	list := c.credsList()
+	if len(list) == 0 {
+		return Usage{}, ErrCodexNoAuth
 	}
 
+	var rejected []string
+	for _, cr := range list {
+		u, err := c.fetchWith(ctx, cr)
+		if errors.Is(err, ErrCodexAuthExpired) {
+			rejected = append(rejected, cr.Source)
+			continue
+		}
+		if err != nil {
+			return Usage{}, err
+		}
+		return u, nil
+	}
+	// Every source was rejected. Name them, so the remedy is obvious rather
+	// than a guess between two logins.
+	return Usage{}, fmt.Errorf("%w (tried: %s)", ErrCodexAuthExpired, strings.Join(rejected, ", "))
+}
+
+// fetchWith performs one request with one credential.
+func (c *Codex) fetchWith(ctx context.Context, cr codexCreds) (Usage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.usageURL(), nil)
 	if err != nil {
 		return Usage{}, err
@@ -168,7 +211,7 @@ func (c *Codex) Fetch(ctx context.Context) (Usage, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusUnauthorized {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return Usage{}, ErrCodexAuthExpired
 	}
 	if resp.StatusCode != http.StatusOK {

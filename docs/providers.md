@@ -14,6 +14,12 @@ up under **Subscription usage** on the Dashboard; if not, it is skipped silently
 | **Copilot** (GitHub) | `api.github.com/copilot_internal/user` | `~/.config/github-copilot/apps.json` |
 | **Gemini** (Google) | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` | `~/.gemini/oauth_creds.json`, **or** opencode's `google` OAuth session |
 
+Codex accepts either source and tries them in order. A token being *present* is
+not the same as it being *valid*, so a rejected one falls through to the next
+rather than failing the provider — having both the Codex CLI and opencode signed
+in is normal, and one going stale should not hide your quota. The error only
+says "re-authenticate" once every source has been refused, and it names which.
+
 The Claude and Codex providers are verified end-to-end. Copilot and Gemini
 follow the documented endpoints and are covered by fixture tests; validate them
 against a live account before relying on the exact numbers.
