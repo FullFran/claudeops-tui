@@ -12,9 +12,9 @@
  * is already shared with Claude Code, which is exactly the mistake that got an
  * account 429'd once already.
  *
- * Install:
- *   plugin: ["claudeops/plugins/opencode/claudeops.tsx"]   in opencode.json
- * or drop it in ~/.config/opencode/plugins/.
+ * Install: add the absolute path to the `plugin` array in ~/.config/opencode/
+ * tui.json. Not opencode.json — that array is the server plugin registry and
+ * rejects this with "must default export an object with server()".
  *
  * The jsxImportSource pragma above is load-bearing. A .tsx file dropped into the
  * plugins directory is compiled with whatever default the runtime has, which is
@@ -137,28 +137,34 @@ export default {
     })
     onCleanup(() => clearInterval(timer))
 
-    api.slots.register({
-      slots: {
-        session_prompt_right: (ctx) => {
-          const data = groups()
+    // The prompt lives in two places: the home screen and an open session. Only
+    // registering the session one meant nothing appeared until you started
+    // talking, which reads as "the plugin is broken".
+    const segment = (ctx: { theme: TuiPluginApi["theme"] }) => {
+      const data = groups()
           // Nothing to say: render nothing rather than a placeholder. The
           // prompt is not the place to explain a missing credential.
-          if (!data || data.length === 0) return null
+      if (!data || data.length === 0) return null
 
-          // ctx.theme is the theme *controller*; the colours live on .current,
-          // and reading it here rather than at registration means a theme
-          // switch is picked up on the next render.
-          const palette = ctx.theme.current
-          const worst = peak(data)
-          const colour =
-            worst >= critAt ? palette.error : worst >= warnAt ? palette.warning : palette.textMuted
+      // ctx.theme is the theme *controller*; the colours live on .current, and
+      // reading it here rather than at registration means a theme switch is
+      // picked up on the next render.
+      const palette = ctx.theme.current
+      const worst = peak(data)
+      const colour =
+        worst >= critAt ? palette.error : worst >= warnAt ? palette.warning : palette.textMuted
 
-          return (
-            <box paddingLeft={1}>
-              <text fg={colour}>{format(data)}</text>
-            </box>
-          )
-        },
+      return (
+        <box paddingLeft={1}>
+          <text fg={colour}>{format(data)}</text>
+        </box>
+      )
+    }
+
+    api.slots.register({
+      slots: {
+        home_prompt_right: segment,
+        session_prompt_right: segment,
       },
     })
   },
