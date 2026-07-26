@@ -5,7 +5,8 @@ import "strings"
 // Model ids reach us decorated in provider-specific ways: opencode qualifies
 // them with the gateway ("openai/gpt-5"), Ollama appends a tag
 // ("kimi-k2.5:cloud"), Antigravity prefixes the product onto the underlying
-// model ("antigravity-gemini-3-pro"), gateways mark free tiers ("-free"), and
+// model ("antigravity-gemini-3-pro") and marks reasoning variants with a
+// suffix ("claude-opus-4-5-thinking"), gateways mark free tiers ("-free"), and
 // Claude Code appends a context-window bracket ("claude-fable-5[1m]").
 //
 // NormalizeModelID strips all of those decorations down to the bare model id,
@@ -21,6 +22,7 @@ var modelIDTransforms = []func(string) (string, bool){
 	stripProviderPrefix,
 	stripTagSuffix,
 	stripFreeSuffix,
+	stripThinkingSuffix,
 	stripVendorDecoration,
 	claudeDotsToDashes,
 }
@@ -102,6 +104,20 @@ func stripTagSuffix(s string) (string, bool) {
 
 func stripFreeSuffix(s string) (string, bool) {
 	if base, ok := strings.CutSuffix(s, "-free"); ok && base != "" {
+		return base, true
+	}
+	return s, false
+}
+
+// stripThinkingSuffix drops the reasoning-variant marker some vendors append
+// ("claude-opus-4-5-thinking"). The variant bills as the model it wraps, so it
+// belongs at that model's rate rather than at no rate at all — left decorated
+// it matched nothing and the event was stored with a NULL cost.
+//
+// Because ModelIDCandidates keeps the undecorated forms too, a table that does
+// carry an explicit entry for the thinking variant still wins over this.
+func stripThinkingSuffix(s string) (string, bool) {
+	if base, ok := strings.CutSuffix(s, "-thinking"); ok && base != "" {
 		return base, true
 	}
 	return s, false

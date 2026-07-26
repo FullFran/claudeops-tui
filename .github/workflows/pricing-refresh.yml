@@ -1,0 +1,77 @@
+name: pricing-refresh
+
+# The embedded LiteLLM snapshot (internal/pricing/litellm_prices.json) is a
+# build-time artifact: nothing refreshes it at runtime, so it silently goes
+# stale and every model released after the last refresh ingests with a NULL
+# cost. That is how claude-opus-5 went unpriced for two weeks.
+#
+# This job regenerates it weekly and pushes straight to main when the dataset
+# moved. Tests run before the push, so main never receives a snapshot that
+# fails to build or embed.
+on:
+  schedule:
+    # Mondays 05:00 UTC — after the weekend, before the working week.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pricing-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # update-pricing.sh already refuses to overwrite when the upstream
+      # response parses to fewer than 100 models, so a source-format change
+      # fails here rather than landing a truncated table.
+      - name: Refresh snapshot
+        run: make update-pricing
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- internal/pricing/litellm_prices.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Snapshot already current."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            before="$(git show HEAD:internal/pricing/litellm_prices.json | jq 'keys | length')"
+            after="$(jq 'keys | length' internal/pricing/litellm_prices.json)"
+            echo "models=$before -> $after" >> "$GITHUB_OUTPUT"
+            echo "Models: $before -> $after"
+          fi
+
+      # Guard the push: a malformed snapshot breaks the go:embed at compile
+      # time, and the price table has unit tests asserting real lookups.
+      - name: Build
+        if: steps.diff.outputs.changed == 'true'
+        run: CGO_ENABLED=0 go build ./...
+
+      - name: Test
+        if: steps.diff.outputs.changed == 'true'
+        run: go test ./...
+
+      - name: Commit to main
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add internal/pricing/litellm_prices.json
+          git commit \
+            -m "chore(pricing): refresh the embedded LiteLLM snapshot" \
+            -m "Automated weekly refresh from the upstream LiteLLM dataset. Models: ${{ steps.diff.outputs.models }}"
+          git push origin HEAD:main
