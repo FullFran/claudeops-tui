@@ -311,6 +311,7 @@
       <a href="#why" class="hide-sm" data-es="por qué">why</a>
       <a href="#features" class="hide-sm" data-es="features">features</a>
       <a href="#mcp" class="hide-sm">mcp</a>
+      <a href="#statusbar" class="hide-sm" data-es="barra">status bar</a>
       <a href="#install" data-es="instalar">install</a>
       <a href="https://github.com/FullFran/claudeops-tui" class="gh" target="_blank" rel="noopener">GitHub ↗</a>
       <span class="lang" role="group" aria-label="Language">
@@ -537,6 +538,50 @@
 </section>
 
 <!-- ─────────────────────────────  INSTALL / QUICKSTART  ───────────────────────────── -->
+<section class="section" id="statusbar">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="eyebrow">status bar</div>
+      <h2 data-es="Tu cuota, donde ya estás mirando.">Your quota, where you are already looking.</h2>
+      <p class="section-lead" data-es="El dashboard es para investigar. Para el resto del día basta una línea: cuánta cuota queda, sin cambiar de ventana. Funciona en tmux, en opencode, en Zellij o en tu prompt.">The dashboard is for digging in. The rest of the day you just want one line: how much quota is left, without switching windows. Works in tmux, in opencode, in Zellij, or in your shell prompt.</p>
+    </div>
+
+    <div class="code-block reveal"><span class="p">$</span> claudeops statusline
+<span class="c-green">5h 3%</span> · <span class="c-green">7d 29%</span></div>
+
+    <div class="grid reveal" style="margin-top:2rem">
+      <div class="card">
+        <h3>tmux</h3>
+        <p data-es="Un segmento en tu status-right. Sigue al agente del panel activo: un panel de Claude Code muestra Anthropic, uno de opencode con modelos OpenAI muestra Codex.">One segment in your <code>status-right</code>. It follows the agent in the active pane — a Claude Code pane shows Anthropic, an opencode pane wired to OpenAI shows Codex.</p>
+        <div class="code-block">set -g status-right <span class="c-green">"#(claudeops statusline --color) │ %H:%M"</span></div>
+      </div>
+
+      <div class="card">
+        <h3>opencode</h3>
+        <p data-es="Un plugin de TUI que pone los mismos números junto al prompt. Se declara en tui.json, no en opencode.json.">A TUI plugin putting the same numbers beside the prompt. Declared in <code>tui.json</code>, not <code>opencode.json</code>.</p>
+        <div class="code-block"><span class="cm">// ~/.config/opencode/tui.json</span>
+{ <span class="c-green">"plugin"</span>: [<span class="c-green">"/path/to/claudeops.tsx"</span>] }</div>
+      </div>
+
+      <div class="card">
+        <h3 data-es="Cualquier otra cosa">Anything else</h3>
+        <p data-es="Zellij, un prompt de shell, o lo que sepa ejecutar un comando. Con --format json salen los números crudos.">Zellij, a shell prompt, or anything that can run a command. <code>--format json</code> gives you the raw numbers.</p>
+        <div class="code-block"><span class="p">$</span> claudeops statusline --format json
+<span class="c-dim">[{"provider":"claude","windows":[…]}]</span></div>
+      </div>
+    </div>
+
+    <div class="reveal" style="margin-top:2rem">
+      <p class="section-lead" data-es="No consulta la API en cada refresco. El snapshot se cachea en disco y lo comparten todos los procesos, así que una barra redibujándose cada dos segundos hace una petición por minuto, no treinta — y abrir el dashboard a la vez no cuesta nada.">It does not call the API on every redraw. The snapshot is cached on disk and shared between processes, so a bar redrawing every two seconds makes one request a minute rather than thirty — and opening the dashboard alongside it costs nothing.</p>
+      <div class="code-block"><span class="p">$</span> claudeops statusline doctor
+<span class="c-dim">claude    </span><span class="c-green">ok    </span><span class="c-dim">  5h 3% · 7d 29%</span>
+<span class="c-dim">codex     </span><span class="c-green">ok    </span><span class="c-dim">  7d 0%  (plan: plus, via opencode)</span>
+<span class="c-dim">copilot   absent  no credentials found</span></div>
+      <p class="section-lead" data-es="Cuando el segmento sale vacío —y sale vacío a propósito, en vez de escupir un error en tu barra— el doctor te dice por qué y qué hacer." style="margin-top:1rem">When the segment comes up empty — and it comes up empty on purpose, rather than putting an error in your bar — the doctor says why, and what to do about it.</p>
+    </div>
+  </div>
+</section>
+
 <section class="section" id="install">
   <div class="wrap">
     <div class="reveal">
