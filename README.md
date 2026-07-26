@@ -327,6 +327,14 @@ switch provider from a keybinding: [`docs/statusline.md`](./docs/statusline.md).
 There is also an [opencode plugin](./plugins/opencode) that puts the same numbers
 beside the opencode prompt.
 
+Three ways to read the same data, all backed by one shared cache:
+
+| Where | How |
+|---|---|
+| tmux, Zellij, shell prompt | `claudeops statusline` — see [`docs/statusline.md`](./docs/statusline.md) |
+| beside the opencode prompt | the [TUI plugin](./plugins/opencode) |
+| full detail | `claudeops` — the dashboard |
+
 ## Files
 
 | Path | Purpose |
