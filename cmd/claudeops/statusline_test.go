@@ -59,7 +59,7 @@ func TestStatuslineServesFreshCacheWithoutFetching(t *testing.T) {
 	// This is the whole reason the package exists: a bar redrawing every two
 	// seconds must not reach the network.
 	p := config.ForHome(t.TempDir())
-	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17), nil, time.Now()); err != nil {
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeFetcher{snap: snapAt(99)}
@@ -78,7 +78,7 @@ func TestStatuslineServesFreshCacheWithoutFetching(t *testing.T) {
 
 func TestStatuslineRefetchesWhenCacheIsStale(t *testing.T) {
 	p := config.ForHome(t.TempDir())
-	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17), nil, time.Now().Add(-time.Hour)); err != nil {
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now().Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeFetcher{snap: snapAt(99)}
@@ -97,7 +97,7 @@ func TestStatuslineRefetchesWhenCacheIsStale(t *testing.T) {
 
 func TestStatuslineRefreshFlagBypassesFreshCache(t *testing.T) {
 	p := config.ForHome(t.TempDir())
-	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17), nil, time.Now()); err != nil {
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeFetcher{snap: snapAt(99)}
@@ -115,7 +115,7 @@ func TestStatuslineFallsBackToStaleOnFetchFailure(t *testing.T) {
 	// Stale beats blank: a quota from an hour ago still says roughly where you
 	// stand, while an empty segment reads as a broken bar.
 	p := config.ForHome(t.TempDir())
-	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17), nil, time.Now().Add(-time.Hour)); err != nil {
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now().Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeFetcher{err: errors.New("network down")}
@@ -185,7 +185,7 @@ func TestStatuslineFormats(t *testing.T) {
 
 func TestStatuslineTTLFlagIsHonoured(t *testing.T) {
 	p := config.ForHome(t.TempDir())
-	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17), nil, time.Now().Add(-30*time.Second)); err != nil {
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), nil, time.Now().Add(-30*time.Second))); err != nil {
 		t.Fatal(err)
 	}
 	// Default TTL would serve this; a shorter one must not.
@@ -453,8 +453,8 @@ func TestStatuslineKeepsCachedDataForSourcesItSkipped(t *testing.T) {
 	// Skipping a source must not drop what is already known about it, or
 	// switching provider would start from nothing.
 	p := config.ForHome(t.TempDir())
-	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17),
-		[]provider.Usage{codexResult(12)}, time.Now().Add(-time.Hour)); err != nil {
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17),
+		[]provider.Usage{codexResult(12)}, time.Now().Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	regCalls := 0
@@ -527,5 +527,86 @@ func writeSnapshotCache(t *testing.T, path string, h usage.History, now time.Tim
 	}
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func codexAt(util float64, fetched time.Time) provider.Usage {
+	return provider.Usage{
+		Provider:  "Codex",
+		Windows:   []provider.Window{{Label: "7d", Utilization: util, ResetsAt: fetched.Add(72 * time.Hour)}},
+		Source:    "opencode",
+		FetchedAt: fetched,
+	}
+}
+
+func TestStatuslineClaudeRefreshDoesNotRenewProviderCache(t *testing.T) {
+	// Rendering Claude must not renew the lease on provider data it never
+	// fetched. Writing the whole file back with one fresh timestamp meant a bar
+	// sitting on Claude kept the Codex entry alive indefinitely — observed in
+	// the wild as a Codex percentage frozen for over an hour while the endpoint
+	// had long since moved on.
+	p := config.ForHome(t.TempDir())
+	stale := time.Now().Add(-time.Hour)
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), []provider.Usage{codexAt(0, stale)}, stale)); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeFetcher{snap: snapAt(42)}
+	var regCalls int
+	reg := countingRegistry{usages: []provider.Usage{codexAt(4, time.Now())}, calls: &regCalls}
+	var out bytes.Buffer
+
+	// Claude only: the registry is deliberately not consulted.
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "claude"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+	if regCalls != 0 {
+		t.Fatalf("a claude-only render must not fetch providers, got %d calls", regCalls)
+	}
+
+	// Codex was last fetched an hour ago, so asking for it now must hit the
+	// registry rather than serve whatever the previous run copied forward.
+	out.Reset()
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "codex"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+	if regCalls != 1 {
+		t.Fatalf("stale provider data must be refetched, got %d registry calls", regCalls)
+	}
+	if got := strings.TrimSpace(out.String()); !strings.Contains(got, "4%") {
+		t.Errorf("got %q, want the freshly fetched 4%%", got)
+	}
+}
+
+func TestStatuslineProviderRefreshDoesNotRenewSnapshotCache(t *testing.T) {
+	// The same defect in the other direction: rendering Codex carries the
+	// Anthropic snapshot forward, and must not mark it fresh in the process.
+	p := config.ForHome(t.TempDir())
+	stale := time.Now().Add(-time.Hour)
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17), []provider.Usage{codexAt(0, stale)}, stale)); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeFetcher{snap: snapAt(42)}
+	var regCalls int
+	reg := countingRegistry{usages: []provider.Usage{codexAt(4, time.Now())}, calls: &regCalls}
+	var out bytes.Buffer
+
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "codex"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 0 {
+		t.Fatalf("a codex-only render must not fetch Anthropic, got %d calls", f.calls)
+	}
+
+	out.Reset()
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "claude"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 1 {
+		t.Fatalf("stale snapshot must be refetched, got %d fetches", f.calls)
+	}
+	if got := strings.TrimSpace(out.String()); got != "5h 42%" {
+		t.Errorf("got %q, want the freshly fetched 5h 42%%", got)
 	}
 }

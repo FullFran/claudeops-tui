@@ -45,7 +45,7 @@ func TestWriteThenReadRoundTrips(t *testing.T) {
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	snap := usage.Snapshot{FiveHour: &usage.Bucket{Utilization: 42, ResetsAt: now.Add(time.Hour)}}
 
-	if err := WriteCache(path, snap, nil, now); err != nil {
+	if err := WriteCache(path, NewCached(snap, nil, now)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadCache(path)
@@ -64,7 +64,7 @@ func TestWriteCacheIsPrivate(t *testing.T) {
 	// The snapshot describes the account's quota, so it must not be world
 	// readable even if the surrounding directory is permissive.
 	path := filepath.Join(t.TempDir(), "cache.json")
-	if err := WriteCache(path, usage.Snapshot{}, nil, time.Now()); err != nil {
+	if err := WriteCache(path, NewCached(usage.Snapshot{}, nil, time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -81,7 +81,7 @@ func TestWriteCacheLeavesNoTempFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cache.json")
 	for range 3 {
-		if err := WriteCache(path, usage.Snapshot{}, nil, time.Now()); err != nil {
+		if err := WriteCache(path, NewCached(usage.Snapshot{}, nil, time.Now())); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -100,7 +100,7 @@ func TestWriteCacheLeavesNoTempFiles(t *testing.T) {
 
 func TestWriteCacheCreatesParentDir(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "deeper", "cache.json")
-	if err := WriteCache(path, usage.Snapshot{}, nil, time.Now()); err != nil {
+	if err := WriteCache(path, NewCached(usage.Snapshot{}, nil, time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); err != nil {
