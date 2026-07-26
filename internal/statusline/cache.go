@@ -21,10 +21,18 @@ import (
 )
 
 // DefaultTTL is how long a cached snapshot is served before a refresh is
-// attempted. Quota buckets move slowly; the 5h window shifts by about 0.3% a
-// minute at full tilt, so a minute of staleness is invisible in a status bar
-// and keeps the request rate negligible.
-const DefaultTTL = time.Minute
+// attempted.
+//
+// It matches usage.Client's own default rather than undercutting it. The
+// endpoint is undocumented and shared with Claude Code itself, and a minute was
+// five times more aggressive than the value the client had already settled on
+// for exactly that reason — which is how a status bar managed to rate-limit an
+// account on its own.
+//
+// Nothing is lost by waiting: at full tilt the 5h window moves about 0.3% a
+// minute, so five minutes of staleness is a couple of percent in a bar that
+// rounds to whole numbers.
+const DefaultTTL = 5 * time.Minute
 
 // Cached is the on-disk representation. The snapshot is stored as fetched;
 // StoredAt records when we wrote it, which is what TTL is measured against.

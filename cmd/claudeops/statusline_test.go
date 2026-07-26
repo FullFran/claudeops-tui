@@ -399,3 +399,73 @@ func TestStatuslineStatusSubcommand(t *testing.T) {
 		}
 	}
 }
+
+type countingRegistry struct {
+	usages []provider.Usage
+	calls  *int
+}
+
+func (c countingRegistry) FetchAll(context.Context) []provider.Result {
+	*c.calls++
+	out := make([]provider.Result, 0, len(c.usages))
+	for _, u := range c.usages {
+		out = append(out, provider.Result{Name: u.Provider, Usage: u})
+	}
+	return out
+}
+
+func TestStatuslineOnlyAsksSourcesThatCanAnswer(t *testing.T) {
+	// Polling every provider to render one of them spends a request against
+	// each of the others' rate limits, for output nobody asked for.
+	cases := []struct {
+		flag         string
+		wantClaude   bool
+		wantRegistry bool
+	}{
+		{flag: "claude", wantClaude: true, wantRegistry: false},
+		{flag: "codex", wantClaude: false, wantRegistry: true},
+		{flag: "all", wantClaude: true, wantRegistry: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.flag, func(t *testing.T) {
+			p := config.ForHome(t.TempDir())
+			regCalls := 0
+			f := &fakeFetcher{snap: snapAt(42)}
+			reg := countingRegistry{usages: []provider.Usage{codexResult(12)}, calls: &regCalls}
+
+			var out bytes.Buffer
+			if err := cmdStatuslineWith(p, &out, []string{"--provider", tc.flag}, f, reg); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.calls > 0; got != tc.wantClaude {
+				t.Errorf("claude fetched=%v want %v", got, tc.wantClaude)
+			}
+			if got := regCalls > 0; got != tc.wantRegistry {
+				t.Errorf("registry fetched=%v want %v", got, tc.wantRegistry)
+			}
+		})
+	}
+}
+
+func TestStatuslineKeepsCachedDataForSourcesItSkipped(t *testing.T) {
+	// Skipping a source must not drop what is already known about it, or
+	// switching provider would start from nothing.
+	p := config.ForHome(t.TempDir())
+	if err := statusline.WriteCache(p.UsageCachePath, snapAt(17),
+		[]provider.Usage{codexResult(12)}, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	regCalls := 0
+	var out bytes.Buffer
+	reg := countingRegistry{calls: &regCalls}
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "claude"}, &fakeFetcher{snap: snapAt(42)}, reg); err != nil {
+		t.Fatal(err)
+	}
+	c, err := statusline.ReadCache(p.UsageCachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers) != 1 {
+		t.Errorf("cached provider data was dropped: %+v", c.Providers)
+	}
+}
