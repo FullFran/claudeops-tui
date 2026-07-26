@@ -9,13 +9,18 @@ where you are already looking.
 
 ## Install
 
-Point opencode at the file, in `opencode.json`:
+This is a **TUI plugin**, so it goes in `tui.json` — not `opencode.json`, and not
+just dropped in the plugins directory:
 
 ```json
-{ "plugin": ["/path/to/claudeops/plugins/opencode/claudeops.tsx"] }
+// ~/.config/opencode/tui.json
+{ "plugin": ["/absolute/path/to/claudeops.tsx"] }
 ```
 
-or copy it into `~/.config/opencode/plugins/`.
+The `plugin` array in `opencode.json` is the *server* plugin registry. Putting
+this there fails with `must default export an object with server()`, and copying
+the file into `~/.config/opencode/plugins/` without declaring it does nothing at
+all — that directory is only auto-loaded for server plugins.
 
 The `@jsxImportSource` pragma on line 1 is load-bearing — a `.tsx` dropped into
 the plugins directory is otherwise compiled with the runtime's default JSX
