@@ -33,6 +33,11 @@ type Usage struct {
 	Windows []Window
 	// Note is an optional single line of extra context (credits, plan, ...).
 	Note string
+	// Source names the credential store this came from, when a provider can
+	// read more than one. Diagnostics only: knowing that Codex answered via
+	// opencode rather than the Codex CLI is the difference between "re-run
+	// codex login" and "you are already signed in".
+	Source string
 	// FetchedAt is when this snapshot was retrieved.
 	FetchedAt time.Time
 }

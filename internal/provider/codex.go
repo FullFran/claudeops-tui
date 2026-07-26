@@ -222,7 +222,9 @@ func (c *Codex) fetchWith(ctx context.Context, cr codexCreds) (Usage, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return Usage{}, err
 	}
-	return c.toUsage(body), nil
+	u := c.toUsage(body)
+	u.Source = cr.Source
+	return u, nil
 }
 
 func (c *Codex) loadAuth() (*codexAuth, error) {
