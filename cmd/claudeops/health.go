@@ -61,6 +61,46 @@ type emitCounter interface {
 	EmitErrorCount() int64
 }
 
+// pollReporter is the slice of *opencode.Ingester the poll watchdog reads.
+type pollReporter interface {
+	LastErr() error
+}
+
+// supervisePollErrors records a poll failure that will not clear on its own.
+//
+// A polling ingester never dies: Watch swallows each poll's error and sleeps
+// until the next one, which is right for a locked database or a half-written
+// row but wrong for anything permanent. A schema change, a corrupted file or a
+// revoked permission then fails identically every five seconds while the
+// dashboard just stops growing, and the only trace is a field nothing reads.
+//
+// Requiring a streak keeps the ordinary transient failure quiet, and reporting
+// once per outage keeps a long one from filling the summary with copies of
+// itself.
+func supervisePollErrors(ctx context.Context, source string, ing pollReporter, h *collectorHealth, interval time.Duration) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	streak := 0
+	reported := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		err := ing.LastErr()
+		if err == nil {
+			streak, reported = 0, false
+			continue
+		}
+		streak++
+		if streak >= stallSamples && !reported {
+			h.add(source, fmt.Errorf("polling keeps failing, no new events are being ingested: %w", err))
+			reported = true
+		}
+	}
+}
+
 const (
 	// stallInterval is how often the emit-error counter is sampled.
 	stallInterval = 5 * time.Second

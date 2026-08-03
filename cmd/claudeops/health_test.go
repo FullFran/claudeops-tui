@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -94,5 +95,65 @@ func TestCollectorHealthWriteToStaysQuietWhenHealthy(t *testing.T) {
 	h.writeTo(&sb)
 	if !strings.Contains(sb.String(), "claude") || !strings.Contains(sb.String(), "boom") {
 		t.Errorf("report = %q, want the source and the reason", sb.String())
+	}
+}
+
+// stickyPoller always reports the same failure, the way a schema change or a
+// revoked permission would.
+type stickyPoller struct{ err error }
+
+func (p stickyPoller) LastErr() error { return p.err }
+
+// healingPoller fails a few times and then recovers, the way a locked database
+// does. It must never be reported.
+type healingPoller struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *healingPoller) LastErr() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	if p.calls <= stallSamples-1 {
+		return errors.New("database is locked")
+	}
+	return nil
+}
+
+func TestSupervisePollErrorsReportsOnlyPermanentFailures(t *testing.T) {
+	tests := []struct {
+		name     string
+		poller   pollReporter
+		wantNote bool
+	}{
+		{name: "failure never clears", poller: stickyPoller{errors.New("no such table: message")}, wantNote: true},
+		{name: "failure clears on its own", poller: &healingPoller{}, wantNote: false},
+		{name: "polling is healthy", poller: stickyPoller{nil}, wantNote: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			var h collectorHealth
+			supervisePollErrors(ctx, "opencode", tc.poller, &h, time.Millisecond)
+
+			notes := h.snapshot()
+			if got := len(notes) > 0; got != tc.wantNote {
+				t.Fatalf("recorded a note = %v, want %v (%v)", got, tc.wantNote, notes)
+			}
+			if !tc.wantNote {
+				return
+			}
+			if !strings.Contains(notes[0], "opencode") {
+				t.Errorf("note = %q, want it to name the source", notes[0])
+			}
+			if !strings.Contains(notes[0], "no such table: message") {
+				t.Errorf("note = %q, want it to carry the underlying failure", notes[0])
+			}
+			if len(notes) != 1 {
+				t.Errorf("a continuing failure must be reported once, got %d notes", len(notes))
+			}
+		})
 	}
 }
