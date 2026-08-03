@@ -39,6 +39,14 @@ type Record struct {
 	// CacheCreate1h is the part of CacheCreate written with a 1h TTL, which
 	// bills higher than a 5m one. 0 when the source reports no breakdown.
 	CacheCreate1h int64
+	// ReportedCostUSD is what the source says this event was actually billed,
+	// in USD, or nil when the source does not know. It is not an estimate: a
+	// gateway that resells models (opencode's Zen) sets its own rates, so no
+	// public price table can reproduce the number it charged.
+	//
+	// The Sink prefers it over the table-derived estimate, but only when it is
+	// positive — see StoreSink.Emit for why zero is not authoritative.
+	ReportedCostUSD *float64
 }
 
 // Sink decouples source adapters from the concrete store. Implemented by

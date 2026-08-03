@@ -165,17 +165,18 @@ func (ing *Ingester) poll(ctx context.Context) error {
 		ts := time.UnixMilli(timeCreated).UTC()
 
 		r := source.Record{
-			Source:      source.Opencode,
-			UUID:        "opencode:" + msgID,
-			SessionID:   "opencode:" + sessionID,
-			CWD:         cwd,
-			Type:        "assistant",
-			Model:       canonicalModel,
-			TS:          ts,
-			In:          toks.In,
-			Out:         toks.Out,
-			CacheRead:   toks.CacheRead,
-			CacheCreate: toks.CacheCreate,
+			Source:          source.Opencode,
+			UUID:            "opencode:" + msgID,
+			SessionID:       "opencode:" + sessionID,
+			CWD:             cwd,
+			Type:            "assistant",
+			Model:           canonicalModel,
+			TS:              ts,
+			In:              toks.In,
+			Out:             toks.Out,
+			CacheRead:       toks.CacheRead,
+			CacheCreate:     toks.CacheCreate,
+			ReportedCostUSD: d.BilledCostUSD(),
 		}
 
 		if err := ing.sink.Emit(ctx, r); err != nil {

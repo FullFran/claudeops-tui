@@ -327,41 +327,78 @@ func TestIngesterModelNormalization(t *testing.T) {
 	}
 }
 
-// TestIngesterCostIgnored verifies REQ-3.3: data.cost is ignored even when non-zero.
-// The Ingester must emit the Record with the model key (so the Sink can price it);
-// it must NOT copy data.cost into the record.
-func TestIngesterCostIgnored(t *testing.T) {
-	dir := t.TempDir()
-	db := makeFixtureDB(t, dir)
-	defer func() { _ = db.Close() }()
-
-	insertSession(t, db, "ses1", "/home/user/project")
-	insertMessage(t, db, "msg1", "ses1", 1000,
-		`{"role":"assistant","modelID":"claude-opus-4-8","providerID":"anthropic","cost":9999.99,
-		  "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`)
-
-	sink := &fakeSink{}
-	wm := newFakeStore()
-	ing := NewIngester(filepath.Join(dir, "opencode.db"), wm, sink)
-
-	if err := ing.IngestExisting(context.Background()); err != nil {
-		t.Fatalf("IngestExisting: %v", err)
+// TestIngesterReportedCost verifies REQ-3.3 as amended: the Ingester forwards
+// data.cost only when opencode reports a positive amount, which means the call
+// was billed per token. A zero — what opencode records for a call covered by a
+// subscription the user already holds — is left for the Sink to price from the
+// table, so the dashboard keeps showing what that traffic was worth.
+func TestIngesterReportedCost(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want *float64
+	}{
+		{
+			name: "zen route forwards the billed amount",
+			data: `{"role":"assistant","modelID":"kimi-k2.6","providerID":"opencode-go","cost":0.0715524,
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: ptr(0.0715524),
+		},
+		{
+			name: "subscription route reports zero and keeps the estimate",
+			data: `{"role":"assistant","modelID":"gpt-5.3-codex","providerID":"openai","cost":0,
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: nil,
+		},
+		{
+			name: "absent cost field keeps the estimate",
+			data: `{"role":"assistant","modelID":"claude-opus-4-8","providerID":"anthropic",
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: nil,
+		},
+		{
+			name: "negative cost is not trusted",
+			data: `{"role":"assistant","modelID":"kimi-k2.6","providerID":"opencode-go","cost":-1,
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: nil,
+		},
 	}
-	if len(sink.records) != 1 {
-		t.Fatalf("want 1 record, got %d", len(sink.records))
-	}
-	// The Record carries no cost field — cost is computed by the Sink.
-	// We verify that the Ingester did not add any cost-related field to Record.
-	// source.Record has no Cost field by design — nothing to assert here except
-	// that the emit happened (tokens were recorded) and model is correctly set.
-	r := sink.records[0]
-	if r.Model != "claude-opus-4-8" {
-		t.Errorf("Model: got %q want %q", r.Model, "claude-opus-4-8")
-	}
-	if r.In != 10 {
-		t.Errorf("In: got %d want 10", r.In)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db := makeFixtureDB(t, dir)
+			defer func() { _ = db.Close() }()
+
+			insertSession(t, db, "ses1", "/home/user/project")
+			insertMessage(t, db, "msg1", "ses1", 1000, tt.data)
+
+			sink := &fakeSink{}
+			ing := NewIngester(filepath.Join(dir, "opencode.db"), newFakeStore(), sink)
+			if err := ing.IngestExisting(context.Background()); err != nil {
+				t.Fatalf("IngestExisting: %v", err)
+			}
+			if len(sink.records) != 1 {
+				t.Fatalf("want 1 record, got %d", len(sink.records))
+			}
+			r := sink.records[0]
+			// Tokens are recorded either way — the cost rule never gates ingestion.
+			if r.In != 10 {
+				t.Errorf("In: got %d want 10", r.In)
+			}
+			switch {
+			case tt.want == nil && r.ReportedCostUSD != nil:
+				t.Errorf("ReportedCostUSD: got %v, want nil", *r.ReportedCostUSD)
+			case tt.want != nil && r.ReportedCostUSD == nil:
+				t.Errorf("ReportedCostUSD: got nil, want %v", *tt.want)
+			case tt.want != nil && *r.ReportedCostUSD != *tt.want:
+				t.Errorf("ReportedCostUSD: got %v want %v", *r.ReportedCostUSD, *tt.want)
+			}
+		})
 	}
 }
+
+func ptr(v float64) *float64 { return &v }
 
 // TestIngesterSessionIDPrefix verifies that SessionID is prefixed with "opencode:".
 func TestIngesterSessionIDPrefix(t *testing.T) {

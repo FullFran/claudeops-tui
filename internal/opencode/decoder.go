@@ -6,9 +6,16 @@
 // provider/model IDs to canonical pricing keys, and emits source.Record values via
 // the Sink abstraction.
 //
-// COST RULE (ADR-006): data.cost is ALWAYS ignored. Cost is recomputed by the
-// StoreSink via pricing.CostFor. Unknown models ingest with nil cost but tokens
-// are still recorded.
+// COST RULE (ADR-006, amended): cost is recomputed by the StoreSink via
+// pricing.CostForCacheTTL, EXCEPT when opencode reports a positive data.cost.
+// That figure is the amount opencode was billed, and no public price table can
+// reproduce it: opencode's Zen gateway resells models at its own rates, and its
+// newest ones reach the table before any price does. Measured against a real
+// database, recomputing lost about a third of Zen spend — mostly to cache-read
+// tokens LiteLLM prices at zero — and dropped two models to €0 outright.
+// A reported 0 means the call was covered by a subscription, so those events
+// keep the estimate. Unknown models still ingest with nil cost; tokens are
+// always recorded.
 //
 // PROVIDER/MODEL NORMALIZATION (ADR-005):
 //   - Anthropic models: strip dots from version numbers (claude-opus-4.6 → claude-opus-4-6)
@@ -53,9 +60,26 @@ type MessageData struct {
 	ModelID    string    `json:"modelID"`
 	ProviderID string    `json:"providerID"`
 	Tokens     tokenData `json:"tokens"`
-	// Cost field present in the blob but deliberately ignored — see package doc.
-	// We capture it only so the JSON decoder does not error on unknown fields.
+	// RawCost is what opencode recorded as the price of this message, in USD.
+	// See BilledCostUSD for when it is trusted.
 	RawCost float64 `json:"cost"`
+}
+
+// BilledCostUSD reports what opencode says this message actually cost, in USD,
+// or nil when that figure carries no information.
+//
+// opencode writes a real number here only for routes it pays per token for —
+// its own Zen gateway, or a provider the user supplied an API key for. When the
+// call went through a subscription the user already holds (a ChatGPT or Copilot
+// login, Antigravity, a free tier, a local Ollama), it records 0, which means
+// "nothing extra was charged", not "this was worthless". Those events keep the
+// table-derived estimate instead — see source.StoreSink.
+func (d *MessageData) BilledCostUSD() *float64 {
+	if d.RawCost <= 0 {
+		return nil
+	}
+	c := d.RawCost
+	return &c
 }
 
 // ToTokenRecord converts the token fields into the flat form needed by

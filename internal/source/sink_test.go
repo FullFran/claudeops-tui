@@ -165,3 +165,127 @@ func TestStoreSink(t *testing.T) {
 		}
 	})
 }
+
+// TestStoreSinkReportedCost covers the rule that a source-reported billing
+// figure replaces the table-derived estimate, but only when it is positive.
+func TestStoreSinkReportedCost(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// usd builds a *float64 for the ReportedCostUSD field.
+	usd := func(v float64) *float64 { return &v }
+
+	// costOf reads back the stored cost for one event.
+	costOf := func(t *testing.T, s *store.Store, uuid string) *float64 {
+		t.Helper()
+		var c *float64
+		if err := s.DB().QueryRow(`SELECT cost_eur FROM events WHERE uuid=?`, uuid).Scan(&c); err != nil {
+			t.Fatalf("SELECT cost_eur for %s: %v", uuid, err)
+		}
+		return c
+	}
+
+	// estimate is what the price table alone produces for the token counts the
+	// cases below share, so each case can assert against it rather than against
+	// a hard-coded number that a price refresh would invalidate.
+	const (
+		inTok  = 1_000_000
+		outTok = 500_000
+		model  = "claude-opus-4-6"
+	)
+	baseline := func(t *testing.T) float64 {
+		t.Helper()
+		sink, s := newTestSink(t)
+		r := source.Record{
+			Source: source.Opencode, UUID: "baseline", SessionID: "sess-b",
+			CWD: "/p/b", Type: "assistant", Model: model, TS: now, In: inTok, Out: outTok,
+		}
+		if err := sink.Emit(ctx, r); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+		got := costOf(t, s, "baseline")
+		if got == nil {
+			t.Fatal("baseline estimate is NULL; the test model lost its price entry")
+		}
+		return *got
+	}
+
+	t.Run("positive report replaces the estimate", func(t *testing.T) {
+		est := baseline(t)
+		sink, s := newTestSink(t)
+		r := source.Record{
+			Source: source.Opencode, UUID: "billed", SessionID: "sess-1",
+			CWD: "/p/x", Type: "assistant", Model: model, TS: now, In: inTok, Out: outTok,
+			ReportedCostUSD: usd(6.5877),
+		}
+		if err := sink.Emit(ctx, r); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+		got := costOf(t, s, "billed")
+		if got == nil {
+			t.Fatal("want the reported cost, got NULL")
+		}
+		want := pricing.EURFromUSD(6.5877)
+		if diff := *got - want; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("want reported cost %v EUR, got %v", want, *got)
+		}
+		if *got == est {
+			t.Error("reported cost was not applied: it equals the table estimate")
+		}
+	})
+
+	t.Run("zero report keeps the estimate", func(t *testing.T) {
+		est := baseline(t)
+		sink, s := newTestSink(t)
+		r := source.Record{
+			Source: source.Opencode, UUID: "subscription", SessionID: "sess-2",
+			CWD: "/p/x", Type: "assistant", Model: model, TS: now, In: inTok, Out: outTok,
+			ReportedCostUSD: usd(0),
+		}
+		if err := sink.Emit(ctx, r); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+		got := costOf(t, s, "subscription")
+		if got == nil || *got != est {
+			t.Errorf("want the table estimate %v kept, got %v", est, got)
+		}
+	})
+
+	t.Run("negative report keeps the estimate", func(t *testing.T) {
+		est := baseline(t)
+		sink, s := newTestSink(t)
+		r := source.Record{
+			Source: source.Opencode, UUID: "negative", SessionID: "sess-3",
+			CWD: "/p/x", Type: "assistant", Model: model, TS: now, In: inTok, Out: outTok,
+			ReportedCostUSD: usd(-1),
+		}
+		if err := sink.Emit(ctx, r); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+		got := costOf(t, s, "negative")
+		if got == nil || *got != est {
+			t.Errorf("want the table estimate %v kept, got %v", est, got)
+		}
+	})
+
+	t.Run("report rescues a model the table cannot price", func(t *testing.T) {
+		sink, s := newTestSink(t)
+		r := source.Record{
+			Source: source.Opencode, UUID: "unpriced", SessionID: "sess-4",
+			CWD: "/p/x", Type: "assistant", Model: "opencode-go/kimi-k3-nonexistent",
+			TS: now, In: inTok, Out: outTok,
+			ReportedCostUSD: usd(2.4177),
+		}
+		if err := sink.Emit(ctx, r); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+		got := costOf(t, s, "unpriced")
+		if got == nil {
+			t.Fatal("want the reported cost for an unpriced model, got NULL")
+		}
+		want := pricing.EURFromUSD(2.4177)
+		if diff := *got - want; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("want %v EUR, got %v", want, *got)
+		}
+	})
+}
