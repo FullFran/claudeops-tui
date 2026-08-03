@@ -271,14 +271,10 @@ func buildCollectors(sources []config.SourceConfig, sk source.Sink, claudeRoot s
 	return cols
 }
 
-// opencodeDefaultDBPath returns the conventional path to the opencode SQLite DB.
-// It mirrors how opencode itself resolves its data directory.
+// opencodeDefaultDBPath returns the conventional path to the opencode SQLite DB,
+// resolved the way opencode itself resolves its data directory.
 func opencodeDefaultDBPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+	return ocingester.DefaultDBPath()
 }
 
 // resolveSources returns the effective source list. When the user has not

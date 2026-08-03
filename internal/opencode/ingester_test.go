@@ -775,3 +775,127 @@ func TestIngesterMissingDBIsSilent(t *testing.T) {
 		t.Errorf("LastErr on missing DB: %v", ing.LastErr())
 	}
 }
+
+// TestIngesterReadsIdleDatabaseWithoutTouchingIt covers the WAL sidecar rule.
+// After opencode shuts down cleanly its -wal and -shm files are gone, and a
+// plain read-only open would recreate them inside opencode's own data
+// directory — or fail outright when that directory is not writable. Neither is
+// acceptable for something that only ever reads.
+func TestIngesterReadsIdleDatabaseWithoutTouchingIt(t *testing.T) {
+	dir := t.TempDir()
+	db := makeFixtureDB(t, dir)
+	insertSession(t, db, "ses1", "/home/user/project")
+	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(10))
+	// A clean close checkpoints the WAL and removes both sidecars, which is
+	// exactly the state this test is about.
+	if err := db.Close(); err != nil {
+		t.Fatalf("closing the fixture DB: %v", err)
+	}
+	dbPath := filepath.Join(dir, "opencode.db")
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); err == nil {
+			t.Fatalf("fixture still has %s; this test needs a quiescent database", suffix)
+		}
+	}
+
+	t.Run("read-only directory still ingests", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+		sink := &fakeSink{}
+		ing := NewIngester(dbPath, newFakeStore(), sink)
+		if err := ing.IngestExisting(context.Background()); err != nil {
+			t.Fatalf("IngestExisting on a quiescent read-only database: %v", err)
+		}
+		if len(sink.records) != 1 {
+			t.Fatalf("want 1 record, got %d", len(sink.records))
+		}
+	})
+
+	t.Run("writable directory is left untouched", func(t *testing.T) {
+		sink := &fakeSink{}
+		ing := NewIngester(dbPath, newFakeStore(), sink)
+		if err := ing.IngestExisting(context.Background()); err != nil {
+			t.Fatalf("IngestExisting: %v", err)
+		}
+		if len(sink.records) != 1 {
+			t.Fatalf("want 1 record, got %d", len(sink.records))
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(dbPath + suffix); err == nil {
+				t.Errorf("reading the database created %s in opencode's data directory", suffix)
+			}
+		}
+	})
+}
+
+// TestIngesterReadsLiveWALData guards the other side of the sidecar rule: when
+// the WAL is present it holds committed rows the main file has not absorbed,
+// so those rows must still be ingested. Reading such a database immutably would
+// silently skip them.
+func TestIngesterReadsLiveWALData(t *testing.T) {
+	dir := t.TempDir()
+	db := makeFixtureDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	insertSession(t, db, "ses1", "/home/user/project")
+	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(10))
+	if _, err := os.Stat(filepath.Join(dir, "opencode.db-wal")); err != nil {
+		t.Fatalf("fixture has no WAL; this test needs an active database: %v", err)
+	}
+
+	sink := &fakeSink{}
+	ing := NewIngester(filepath.Join(dir, "opencode.db"), newFakeStore(), sink)
+	if err := ing.IngestExisting(context.Background()); err != nil {
+		t.Fatalf("IngestExisting: %v", err)
+	}
+	if len(sink.records) != 1 {
+		t.Fatalf("want the row committed to the WAL to be ingested, got %d records", len(sink.records))
+	}
+}
+
+// TestDefaultDBPath verifies that the database is resolved the way opencode
+// resolves its own data directory. Getting this wrong is silent: claudeops
+// simply reports no opencode usage, with nothing to say it looked in the wrong
+// place.
+func TestDefaultDBPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory on this machine: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		xdg  string
+		want string
+	}{
+		{
+			name: "XDG_DATA_HOME wins when set",
+			xdg:  "/custom/data",
+			want: filepath.Join("/custom/data", "opencode", "opencode.db"),
+		},
+		{
+			name: "unset falls back to ~/.local/share",
+			xdg:  "",
+			want: filepath.Join(home, ".local", "share", "opencode", "opencode.db"),
+		},
+		{
+			name: "a relative XDG_DATA_HOME is ignored, as the spec requires",
+			xdg:  "relative/path",
+			want: filepath.Join(home, ".local", "share", "opencode", "opencode.db"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_DATA_HOME", tt.xdg)
+			if got := DefaultDBPath(); got != tt.want {
+				t.Errorf("DefaultDBPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

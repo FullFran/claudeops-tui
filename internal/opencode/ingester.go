@@ -205,9 +205,26 @@ func (ing *Ingester) poll(ctx context.Context) error {
 	return ing.setErr(emitErr)
 }
 
-// openReadOnly opens the opencode DB in read-only WAL mode via modernc.org/sqlite.
-// Uses busy_timeout so transient lock contention (from the opencode process) is
-// handled gracefully without returning an error to the caller.
+// openReadOnly opens the opencode DB read-only via modernc.org/sqlite.
+//
+// Which DSN it uses depends on whether opencode's WAL sidecars are on disk,
+// because a plain read-only open is not as passive as it sounds. To read a
+// WAL-mode database SQLite needs the -shm index, and it will happily create
+// both sidecars to get one — so the ordinary path has claudeops writing into
+// opencode's data directory just to look at it, and fails outright when that
+// directory is not writable.
+//
+// When both sidecars are absent the database file is self-contained: only a
+// clean shutdown removes them, and it checkpoints everything first. immutable=1
+// reads that file without asking for the index, which is both passive and the
+// only thing that works on a read-only mount. Should opencode start up in the
+// meantime, the rows it then writes are newer than anything in our snapshot, so
+// they land past the watermark and the next poll picks them up.
+//
+// When the sidecars do exist the WAL may hold committed rows the main file has
+// not absorbed yet, so the normal path is the only correct one — immutable
+// would quietly serve stale data. busy_timeout keeps it patient while the
+// opencode process holds a lock.
 func (ing *Ingester) openReadOnly() (*sql.DB, error) {
 	// Verify the file exists before attempting to open — avoids creating a new
 	// empty DB at that path (read-only mode should prevent that, but be explicit).
@@ -216,6 +233,9 @@ func (ing *Ingester) openReadOnly() (*sql.DB, error) {
 	}
 	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)",
 		filepath.ToSlash(ing.dbPath))
+	if !ing.walSidecarsPresent() {
+		dsn += "&immutable=1"
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -225,6 +245,46 @@ func (ing *Ingester) openReadOnly() (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// walSidecarsPresent reports whether either WAL sidecar is on disk. Either one
+// is enough to mean the database is not known to be quiescent, which is the
+// conservative reading: it keeps openReadOnly on the path that can see the WAL.
+func (ing *Ingester) walSidecarsPresent() bool {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(ing.dbPath + suffix); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultDBPath resolves the opencode database the same way opencode itself
+// does: under $XDG_DATA_HOME when that is set, otherwise the conventional
+// ~/.local/share. Honoring it matters for anyone who relocates their data
+// directory — without it claudeops looks in a path opencode never writes to and
+// reports no opencode usage at all, with nothing to indicate why.
+//
+// Returns "" when neither the variable nor a home directory can be resolved;
+// callers treat that as "opencode is not installed".
+func DefaultDBPath() string {
+	if dir := dataHome(); dir != "" {
+		return filepath.Join(dir, "opencode", "opencode.db")
+	}
+	return ""
+}
+
+// dataHome returns $XDG_DATA_HOME, or ~/.local/share when it is unset. A
+// relative XDG_DATA_HOME is ignored, as the spec requires.
+func dataHome() string {
+	if v := os.Getenv("XDG_DATA_HOME"); filepath.IsAbs(v) {
+		return v
+	}
+	home, err := homeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share")
 }
 
 // homeDir returns os.UserHomeDir — extracted for test-skipping.
