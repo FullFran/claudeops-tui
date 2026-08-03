@@ -99,37 +99,85 @@ func TestCollectorHealthWriteToStaysQuietWhenHealthy(t *testing.T) {
 }
 
 // stickyPoller always reports the same failure, the way a schema change or a
-// revoked permission would.
-type stickyPoller struct{ err error }
+// revoked permission would. failures is how many polls have failed in a row.
+type stickyPoller struct {
+	err      error
+	failures int
+}
 
 func (p stickyPoller) LastErr() error { return p.err }
+func (p stickyPoller) ConsecutiveFailures() int {
+	if p.err == nil {
+		return 0
+	}
+	return p.failures
+}
 
-// healingPoller fails a few times and then recovers, the way a locked database
-// does. It must never be reported.
+// slowPollPoller is the case the watchdog exists to get right: ONE poll has
+// failed and it is taking a long time, so the watchdog samples that same stale
+// error over and over. Counting samples would call this a permanent outage.
+// Counting polls does not.
+type slowPollPoller struct{}
+
+func (slowPollPoller) LastErr() error           { return errors.New("database is locked") }
+func (slowPollPoller) ConsecutiveFailures() int { return 1 }
+
+// healingPoller fails twice and then recovers, the way a locked database does.
+// Its failure count is driven by polls, not by how often it is asked — in
+// production those are two independent clocks.
 type healingPoller struct {
-	mu    sync.Mutex
-	calls int
+	mu       sync.Mutex
+	polls    int
+	failures int
+	err      error
+}
+
+// poll advances the poller's own clock, independently of the watchdog's.
+func (p *healingPoller) poll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.polls++
+	if p.polls <= stallSamples-1 {
+		p.failures++
+		p.err = errors.New("database is locked")
+		return
+	}
+	p.failures, p.err = 0, nil
 }
 
 func (p *healingPoller) LastErr() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.calls++
-	if p.calls <= stallSamples-1 {
-		return errors.New("database is locked")
-	}
-	return nil
+	return p.err
+}
+
+func (p *healingPoller) ConsecutiveFailures() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failures
 }
 
 func TestSupervisePollErrorsReportsOnlyPermanentFailures(t *testing.T) {
+	healing := &healingPoller{}
+	// Drive the poller through its transient outage before the watchdog ever
+	// looks, so the two clocks stay genuinely independent.
+	for i := 0; i < stallSamples+2; i++ {
+		healing.poll()
+	}
+
 	tests := []struct {
 		name     string
 		poller   pollReporter
 		wantNote bool
 	}{
-		{name: "failure never clears", poller: stickyPoller{errors.New("no such table: message")}, wantNote: true},
-		{name: "failure clears on its own", poller: &healingPoller{}, wantNote: false},
-		{name: "polling is healthy", poller: stickyPoller{nil}, wantNote: false},
+		{
+			name:     "failure never clears",
+			poller:   stickyPoller{err: errors.New("no such table: message"), failures: stallSamples},
+			wantNote: true,
+		},
+		{name: "failure clears on its own", poller: healing, wantNote: false},
+		{name: "one slow poll is not an outage", poller: slowPollPoller{}, wantNote: false},
+		{name: "polling is healthy", poller: stickyPoller{}, wantNote: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

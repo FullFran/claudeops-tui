@@ -51,7 +51,7 @@ $XDG_DATA_HOME/opencode/opencode.db   (opencode, default ~/.local/share)
   → collector (fsnotify watcher + 500ms debounce tick, byte offsets in SQLite)
     or opencode.Ingester (5s SQLite poll with a persisted watermark)
   → source.LineParser (parser.ClaudeLineParser / codex.Parser) → []source.Record
-  → source.StoreSink.Emit: pricing.Calculate() → cost in EUR,
+  → source.StoreSink.Emit: pricing.Calculator.CostForCacheTTL() → cost in EUR,
                            overridden by Record.ReportedCostUSD when positive
                            tasks.Resolve()     → optional task attribution
   → store.Insert() (direct call, no queue) → SQLite (WAL)
@@ -82,7 +82,7 @@ $XDG_DATA_HOME/opencode/opencode.db   (opencode, default ~/.local/share)
 
 ### Concurrency Model
 
-- `cmdTUI` starts one goroutine per enabled line-based source collector (claude, codex) plus one for the opencode poller.
+- `cmdTUI` starts one goroutine per enabled line-based source collector (claude, codex), plus two for the opencode poller: one running `Watch`, one watching `ConsecutiveFailures`. `Watch` never returns on a failing poll, so the first cannot see one.
 - Each collector runs a single fsnotify loop; dirty files are re-read sequentially on a 500ms ticker. There is no per-file tail goroutine.
 - **All of those goroutines call `store.Insert` directly.** There is no ingest channel and no dedicated writer goroutine. Write serialization is SQLite's: WAL plus `busy_timeout(5000)`. Keep inserts short and never hold a transaction across I/O.
 - Bubbletea owns its own runtime and ticks every 2s (`tea.Tick`); async work is dispatched as commands that return `Msg` values.

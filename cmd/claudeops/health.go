@@ -64,6 +64,7 @@ type emitCounter interface {
 // pollReporter is the slice of *opencode.Ingester the poll watchdog reads.
 type pollReporter interface {
 	LastErr() error
+	ConsecutiveFailures() int
 }
 
 // supervisePollErrors records a poll failure that will not clear on its own.
@@ -74,13 +75,20 @@ type pollReporter interface {
 // revoked permission then fails identically every five seconds while the
 // dashboard just stops growing, and the only trace is a field nothing reads.
 //
-// Requiring a streak keeps the ordinary transient failure quiet, and reporting
-// once per outage keeps a long one from filling the summary with copies of
-// itself.
+// The threshold is counted by the ingester, not here. lastErr is a level rather
+// than an event, so counting the samples that observed it would conflate "three
+// failed polls" with "one failed poll seen three times" — and a poll draining a
+// large database cold can outlast many ticks, which makes those wildly
+// different claims. Asking how many polls actually failed keeps the guarantee
+// the one that was intended: an ordinary transient failure, cleared by the next
+// poll, stays quiet.
+//
+// Reporting once per outage keeps a long one from filling the summary with
+// copies of itself; a failure that clears and returns is a new outage and is
+// reported again, because it is news that it came back.
 func supervisePollErrors(ctx context.Context, source string, ing pollReporter, h *collectorHealth, interval time.Duration) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
-	streak := 0
 	reported := false
 	for {
 		select {
@@ -88,14 +96,13 @@ func supervisePollErrors(ctx context.Context, source string, ing pollReporter, h
 			return
 		case <-tick.C:
 		}
-		err := ing.LastErr()
-		if err == nil {
-			streak, reported = 0, false
+		failures := ing.ConsecutiveFailures()
+		if failures == 0 {
+			reported = false
 			continue
 		}
-		streak++
-		if streak >= stallSamples && !reported {
-			h.add(source, fmt.Errorf("polling keeps failing, no new events are being ingested: %w", err))
+		if failures >= stallSamples && !reported {
+			h.add(source, fmt.Errorf("polling keeps failing, no new events are being ingested: %w", ing.LastErr()))
 			reported = true
 		}
 	}

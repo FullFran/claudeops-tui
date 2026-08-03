@@ -1,10 +1,14 @@
 // Package opencode implements source.Ingester for the opencode editor's SQLite DB.
 //
-// opencode stores assistant conversations in ~/.local/share/opencode/opencode.db.
-// Each message row carries a JSON blob in its `data` column. This package reads
-// those rows in read-only mode (mode=ro, WAL-safe), decodes the blobs, normalizes
-// provider/model IDs to canonical pricing keys, and emits source.Record values via
-// the Sink abstraction.
+// opencode stores assistant conversations in a SQLite database under
+// $XDG_DATA_HOME/opencode (default ~/.local/share/opencode) — see DefaultDBPath,
+// which also probes the conventional path so a database written before the
+// variable was exported is never abandoned. Each message row carries a JSON blob
+// in its `data` column. This package reads those rows read-only (`mode=ro`, or
+// `immutable=1` when the database is quiescent so that merely reading it does
+// not create WAL sidecars in opencode's directory — see openReadOnly), decodes
+// the blobs, normalizes provider/model IDs to canonical pricing keys, and emits
+// source.Record values via the Sink abstraction.
 //
 // COST RULE (ADR-006, amended): cost is recomputed by the StoreSink via
 // pricing.CostForCacheTTL, EXCEPT when opencode reports a positive data.cost.

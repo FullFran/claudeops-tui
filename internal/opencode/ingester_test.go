@@ -860,42 +860,185 @@ func TestIngesterReadsLiveWALData(t *testing.T) {
 }
 
 // TestDefaultDBPath verifies that the database is resolved the way opencode
-// resolves its own data directory. Getting this wrong is silent: claudeops
-// simply reports no opencode usage, with nothing to say it looked in the wrong
-// place.
+// resolves its own data directory, and that an existing database is never
+// abandoned for a path that has none. Getting either wrong is silent: claudeops
+// reports no opencode usage, with nothing to say it looked elsewhere — and
+// because `claudeops reingest` clears the store before rebuilding it, silence
+// there costs the history rather than just hiding it.
 func TestDefaultDBPath(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home directory on this machine: %v", err)
+	// touch creates an empty database file at dir/opencode/opencode.db.
+	touch := func(t *testing.T, dir string) string {
+		t.Helper()
+		p := filepath.Join(dir, "opencode", "opencode.db")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
 	}
 
 	tests := []struct {
 		name string
-		xdg  string
+		// setXDG reports whether XDG_DATA_HOME points at the xdg dir.
+		setXDG     bool
+		createXDG  bool
+		createHome bool
+		// want picks which path the case expects: "xdg" or "home".
 		want string
 	}{
-		{
-			name: "XDG_DATA_HOME wins when set",
-			xdg:  "/custom/data",
-			want: filepath.Join("/custom/data", "opencode", "opencode.db"),
-		},
-		{
-			name: "unset falls back to ~/.local/share",
-			xdg:  "",
-			want: filepath.Join(home, ".local", "share", "opencode", "opencode.db"),
-		},
-		{
-			name: "a relative XDG_DATA_HOME is ignored, as the spec requires",
-			xdg:  "relative/path",
-			want: filepath.Join(home, ".local", "share", "opencode", "opencode.db"),
-		},
+		{name: "XDG_DATA_HOME wins when the database is there", setXDG: true, createXDG: true, want: "xdg"},
+		{name: "falls back to ~/.local/share when XDG has no database", setXDG: true, createHome: true, want: "home"},
+		{name: "XDG wins over the conventional path when both exist", setXDG: true, createXDG: true, createHome: true, want: "xdg"},
+		{name: "unset resolves to ~/.local/share", createHome: true, want: "home"},
+		{name: "neither exists resolves to where opencode would write", setXDG: true, want: "xdg"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("XDG_DATA_HOME", tt.xdg)
-			if got := DefaultDBPath(); got != tt.want {
-				t.Errorf("DefaultDBPath() = %q, want %q", got, tt.want)
+			root := t.TempDir()
+			// An absolute path built from the temp dir, so the case is portable:
+			// a hard-coded "/custom/data" is not absolute on Windows.
+			xdgDir := filepath.Join(root, "xdg")
+			homeDirPath := filepath.Join(root, "home")
+			t.Setenv("HOME", homeDirPath)
+			t.Setenv("USERPROFILE", homeDirPath) // os.UserHomeDir on Windows
+
+			if tt.setXDG {
+				t.Setenv("XDG_DATA_HOME", xdgDir)
+			} else {
+				t.Setenv("XDG_DATA_HOME", "")
+			}
+			if tt.createXDG {
+				touch(t, xdgDir)
+			}
+			if tt.createHome {
+				touch(t, filepath.Join(homeDirPath, ".local", "share"))
+			}
+
+			want := filepath.Join(xdgDir, "opencode", "opencode.db")
+			if tt.want == "home" {
+				want = filepath.Join(homeDirPath, ".local", "share", "opencode", "opencode.db")
+			}
+			if got := DefaultDBPath(); got != want {
+				t.Errorf("DefaultDBPath() = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// TestHeaderSaysWAL pins the guard that keeps the immutable read off a database
+// that never has sidecars in the first place. A rollback-journal database would
+// otherwise look permanently quiescent, and every poll would read a file
+// opencode is actively writing with locking and change detection switched off.
+func TestHeaderSaysWAL(t *testing.T) {
+	// makeDB creates a one-table database in the given journal mode.
+	makeDB := func(t *testing.T, mode string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "opencode.db")
+		db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode("+mode+")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`CREATE TABLE t(x)`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	tests := []struct {
+		name string
+		mode string
+		want bool
+	}{
+		{name: "wal database", mode: "WAL", want: true},
+		{name: "rollback journal database", mode: "DELETE", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ing := NewIngester(makeDB(t, tt.mode), newFakeStore(), &fakeSink{})
+			if got := ing.headerSaysWAL(); got != tt.want {
+				t.Errorf("headerSaysWAL() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("a missing file is not WAL", func(t *testing.T) {
+		ing := NewIngester(filepath.Join(t.TempDir(), "absent.db"), newFakeStore(), &fakeSink{})
+		if ing.headerSaysWAL() {
+			t.Error("headerSaysWAL() = true for a file that does not exist")
+		}
+	})
+
+	t.Run("a truncated file is not WAL", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "stub.db")
+		if err := os.WriteFile(p, []byte("SQLite"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ing := NewIngester(p, newFakeStore(), &fakeSink{})
+		if ing.headerSaysWAL() {
+			t.Error("headerSaysWAL() = true for a file too short to have a header")
+		}
+	})
+}
+
+// TestConsecutiveFailuresCountsPolls pins the counter the poll watchdog reads.
+// It must move with polls, not with observations: the watchdog samples on its
+// own clock, and a poll draining a large database cold outlasts many ticks.
+func TestConsecutiveFailuresCountsPolls(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	ing := NewIngester(dbPath, newFakeStore(), &fakeSink{})
+
+	// A database that does not exist is "opencode is not installed", not a
+	// failure, so the counter must stay at zero however often it is read.
+	for i := 0; i < 5; i++ {
+		if err := ing.IngestExisting(context.Background()); err != nil {
+			t.Fatalf("IngestExisting on a missing database: %v", err)
+		}
+	}
+	if got := ing.ConsecutiveFailures(); got != 0 {
+		t.Fatalf("ConsecutiveFailures after 5 no-op polls = %d, want 0", got)
+	}
+
+	// A file that is not a database fails every poll.
+	if err := os.WriteFile(dbPath, []byte("not a database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		if err := ing.IngestExisting(context.Background()); err == nil {
+			t.Fatal("want an error polling a file that is not a database")
+		}
+		if got := ing.ConsecutiveFailures(); got != i {
+			t.Errorf("after %d failed polls: ConsecutiveFailures = %d, want %d", i, got, i)
+		}
+	}
+	// Reading it many times must not advance it — only polling does.
+	for i := 0; i < 10; i++ {
+		if got := ing.ConsecutiveFailures(); got != 3 {
+			t.Fatalf("observing the counter changed it: got %d, want 3", got)
+		}
+	}
+
+	// One good poll clears the streak. Clear the junk file first so the fixture
+	// can create a real database in its place.
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	db := makeFixtureDB(t, dir)
+	defer func() { _ = db.Close() }()
+	insertSession(t, db, "ses1", "/home/user/project")
+	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(10))
+	if err := ing.IngestExisting(context.Background()); err != nil {
+		t.Fatalf("IngestExisting after the database was repaired: %v", err)
+	}
+	if got := ing.ConsecutiveFailures(); got != 0 {
+		t.Errorf("ConsecutiveFailures after a successful poll = %d, want 0", got)
+	}
+	if ing.LastErr() != nil {
+		t.Errorf("LastErr after a successful poll = %v, want nil", ing.LastErr())
 	}
 }
