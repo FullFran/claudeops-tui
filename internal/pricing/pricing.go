@@ -17,6 +17,19 @@ import (
 //go:embed pricing.seed.toml
 var SeedTOML []byte
 
+// EURPerUSD is the conversion factor every price in this package is expressed
+// in. It must stay in sync with EUR_FACTOR in scripts/update-pricing.sh, which
+// applies it when regenerating the embedded LiteLLM snapshot.
+//
+// It is exported because a source can report the amount it was actually billed
+// (opencode records a per-message `cost` in USD), and that figure has to land
+// in the same currency as the table-derived estimates it replaces.
+const EURPerUSD = 0.92
+
+// EURFromUSD converts a provider-reported USD amount into the EUR this package
+// prices in.
+func EURFromUSD(usd float64) float64 { return usd * EURPerUSD }
+
 // litellmPricesJSON is a compact snapshot of the LiteLLM pricing dataset
 // (github.com/BerriAI/litellm), keyed by bare model name → [input, output,
 // cache_read, cache_create] in EUR per 1M tokens (USD × 0.92). It provides

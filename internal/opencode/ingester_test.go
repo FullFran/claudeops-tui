@@ -327,41 +327,78 @@ func TestIngesterModelNormalization(t *testing.T) {
 	}
 }
 
-// TestIngesterCostIgnored verifies REQ-3.3: data.cost is ignored even when non-zero.
-// The Ingester must emit the Record with the model key (so the Sink can price it);
-// it must NOT copy data.cost into the record.
-func TestIngesterCostIgnored(t *testing.T) {
-	dir := t.TempDir()
-	db := makeFixtureDB(t, dir)
-	defer func() { _ = db.Close() }()
-
-	insertSession(t, db, "ses1", "/home/user/project")
-	insertMessage(t, db, "msg1", "ses1", 1000,
-		`{"role":"assistant","modelID":"claude-opus-4-8","providerID":"anthropic","cost":9999.99,
-		  "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`)
-
-	sink := &fakeSink{}
-	wm := newFakeStore()
-	ing := NewIngester(filepath.Join(dir, "opencode.db"), wm, sink)
-
-	if err := ing.IngestExisting(context.Background()); err != nil {
-		t.Fatalf("IngestExisting: %v", err)
+// TestIngesterReportedCost verifies REQ-3.3 as amended: the Ingester forwards
+// data.cost only when opencode reports a positive amount, which means the call
+// was billed per token. A zero — what opencode records for a call covered by a
+// subscription the user already holds — is left for the Sink to price from the
+// table, so the dashboard keeps showing what that traffic was worth.
+func TestIngesterReportedCost(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want *float64
+	}{
+		{
+			name: "zen route forwards the billed amount",
+			data: `{"role":"assistant","modelID":"kimi-k2.6","providerID":"opencode-go","cost":0.0715524,
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: ptr(0.0715524),
+		},
+		{
+			name: "subscription route reports zero and keeps the estimate",
+			data: `{"role":"assistant","modelID":"gpt-5.3-codex","providerID":"openai","cost":0,
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: nil,
+		},
+		{
+			name: "absent cost field keeps the estimate",
+			data: `{"role":"assistant","modelID":"claude-opus-4-8","providerID":"anthropic",
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: nil,
+		},
+		{
+			name: "negative cost is not trusted",
+			data: `{"role":"assistant","modelID":"kimi-k2.6","providerID":"opencode-go","cost":-1,
+			        "tokens":{"total":100,"input":10,"output":10,"reasoning":0,"cache":{"write":0,"read":80}}}`,
+			want: nil,
+		},
 	}
-	if len(sink.records) != 1 {
-		t.Fatalf("want 1 record, got %d", len(sink.records))
-	}
-	// The Record carries no cost field — cost is computed by the Sink.
-	// We verify that the Ingester did not add any cost-related field to Record.
-	// source.Record has no Cost field by design — nothing to assert here except
-	// that the emit happened (tokens were recorded) and model is correctly set.
-	r := sink.records[0]
-	if r.Model != "claude-opus-4-8" {
-		t.Errorf("Model: got %q want %q", r.Model, "claude-opus-4-8")
-	}
-	if r.In != 10 {
-		t.Errorf("In: got %d want 10", r.In)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db := makeFixtureDB(t, dir)
+			defer func() { _ = db.Close() }()
+
+			insertSession(t, db, "ses1", "/home/user/project")
+			insertMessage(t, db, "msg1", "ses1", 1000, tt.data)
+
+			sink := &fakeSink{}
+			ing := NewIngester(filepath.Join(dir, "opencode.db"), newFakeStore(), sink)
+			if err := ing.IngestExisting(context.Background()); err != nil {
+				t.Fatalf("IngestExisting: %v", err)
+			}
+			if len(sink.records) != 1 {
+				t.Fatalf("want 1 record, got %d", len(sink.records))
+			}
+			r := sink.records[0]
+			// Tokens are recorded either way — the cost rule never gates ingestion.
+			if r.In != 10 {
+				t.Errorf("In: got %d want 10", r.In)
+			}
+			switch {
+			case tt.want == nil && r.ReportedCostUSD != nil:
+				t.Errorf("ReportedCostUSD: got %v, want nil", *r.ReportedCostUSD)
+			case tt.want != nil && r.ReportedCostUSD == nil:
+				t.Errorf("ReportedCostUSD: got nil, want %v", *tt.want)
+			case tt.want != nil && *r.ReportedCostUSD != *tt.want:
+				t.Errorf("ReportedCostUSD: got %v want %v", *r.ReportedCostUSD, *tt.want)
+			}
+		})
 	}
 }
+
+func ptr(v float64) *float64 { return &v }
 
 // TestIngesterSessionIDPrefix verifies that SessionID is prefixed with "opencode:".
 func TestIngesterSessionIDPrefix(t *testing.T) {
@@ -736,5 +773,272 @@ func TestIngesterMissingDBIsSilent(t *testing.T) {
 	}
 	if ing.LastErr() != nil {
 		t.Errorf("LastErr on missing DB: %v", ing.LastErr())
+	}
+}
+
+// TestIngesterReadsIdleDatabaseWithoutTouchingIt covers the WAL sidecar rule.
+// After opencode shuts down cleanly its -wal and -shm files are gone, and a
+// plain read-only open would recreate them inside opencode's own data
+// directory — or fail outright when that directory is not writable. Neither is
+// acceptable for something that only ever reads.
+func TestIngesterReadsIdleDatabaseWithoutTouchingIt(t *testing.T) {
+	dir := t.TempDir()
+	db := makeFixtureDB(t, dir)
+	insertSession(t, db, "ses1", "/home/user/project")
+	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(10))
+	// A clean close checkpoints the WAL and removes both sidecars, which is
+	// exactly the state this test is about.
+	if err := db.Close(); err != nil {
+		t.Fatalf("closing the fixture DB: %v", err)
+	}
+	dbPath := filepath.Join(dir, "opencode.db")
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); err == nil {
+			t.Fatalf("fixture still has %s; this test needs a quiescent database", suffix)
+		}
+	}
+
+	t.Run("read-only directory still ingests", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+		sink := &fakeSink{}
+		ing := NewIngester(dbPath, newFakeStore(), sink)
+		if err := ing.IngestExisting(context.Background()); err != nil {
+			t.Fatalf("IngestExisting on a quiescent read-only database: %v", err)
+		}
+		if len(sink.records) != 1 {
+			t.Fatalf("want 1 record, got %d", len(sink.records))
+		}
+	})
+
+	t.Run("writable directory is left untouched", func(t *testing.T) {
+		sink := &fakeSink{}
+		ing := NewIngester(dbPath, newFakeStore(), sink)
+		if err := ing.IngestExisting(context.Background()); err != nil {
+			t.Fatalf("IngestExisting: %v", err)
+		}
+		if len(sink.records) != 1 {
+			t.Fatalf("want 1 record, got %d", len(sink.records))
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(dbPath + suffix); err == nil {
+				t.Errorf("reading the database created %s in opencode's data directory", suffix)
+			}
+		}
+	})
+}
+
+// TestIngesterReadsLiveWALData guards the other side of the sidecar rule: when
+// the WAL is present it holds committed rows the main file has not absorbed,
+// so those rows must still be ingested. Reading such a database immutably would
+// silently skip them.
+func TestIngesterReadsLiveWALData(t *testing.T) {
+	dir := t.TempDir()
+	db := makeFixtureDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	insertSession(t, db, "ses1", "/home/user/project")
+	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(10))
+	if _, err := os.Stat(filepath.Join(dir, "opencode.db-wal")); err != nil {
+		t.Fatalf("fixture has no WAL; this test needs an active database: %v", err)
+	}
+
+	sink := &fakeSink{}
+	ing := NewIngester(filepath.Join(dir, "opencode.db"), newFakeStore(), sink)
+	if err := ing.IngestExisting(context.Background()); err != nil {
+		t.Fatalf("IngestExisting: %v", err)
+	}
+	if len(sink.records) != 1 {
+		t.Fatalf("want the row committed to the WAL to be ingested, got %d records", len(sink.records))
+	}
+}
+
+// TestDefaultDBPath verifies that the database is resolved the way opencode
+// resolves its own data directory, and that an existing database is never
+// abandoned for a path that has none. Getting either wrong is silent: claudeops
+// reports no opencode usage, with nothing to say it looked elsewhere — and
+// because `claudeops reingest` clears the store before rebuilding it, silence
+// there costs the history rather than just hiding it.
+func TestDefaultDBPath(t *testing.T) {
+	// touch creates an empty database file at dir/opencode/opencode.db.
+	touch := func(t *testing.T, dir string) string {
+		t.Helper()
+		p := filepath.Join(dir, "opencode", "opencode.db")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	tests := []struct {
+		name string
+		// setXDG reports whether XDG_DATA_HOME points at the xdg dir.
+		setXDG     bool
+		createXDG  bool
+		createHome bool
+		// want picks which path the case expects: "xdg" or "home".
+		want string
+	}{
+		{name: "XDG_DATA_HOME wins when the database is there", setXDG: true, createXDG: true, want: "xdg"},
+		{name: "falls back to ~/.local/share when XDG has no database", setXDG: true, createHome: true, want: "home"},
+		{name: "XDG wins over the conventional path when both exist", setXDG: true, createXDG: true, createHome: true, want: "xdg"},
+		{name: "unset resolves to ~/.local/share", createHome: true, want: "home"},
+		{name: "neither exists resolves to where opencode would write", setXDG: true, want: "xdg"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			// An absolute path built from the temp dir, so the case is portable:
+			// a hard-coded "/custom/data" is not absolute on Windows.
+			xdgDir := filepath.Join(root, "xdg")
+			homeDirPath := filepath.Join(root, "home")
+			t.Setenv("HOME", homeDirPath)
+			t.Setenv("USERPROFILE", homeDirPath) // os.UserHomeDir on Windows
+
+			if tt.setXDG {
+				t.Setenv("XDG_DATA_HOME", xdgDir)
+			} else {
+				t.Setenv("XDG_DATA_HOME", "")
+			}
+			if tt.createXDG {
+				touch(t, xdgDir)
+			}
+			if tt.createHome {
+				touch(t, filepath.Join(homeDirPath, ".local", "share"))
+			}
+
+			want := filepath.Join(xdgDir, "opencode", "opencode.db")
+			if tt.want == "home" {
+				want = filepath.Join(homeDirPath, ".local", "share", "opencode", "opencode.db")
+			}
+			if got := DefaultDBPath(); got != want {
+				t.Errorf("DefaultDBPath() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestHeaderSaysWAL pins the guard that keeps the immutable read off a database
+// that never has sidecars in the first place. A rollback-journal database would
+// otherwise look permanently quiescent, and every poll would read a file
+// opencode is actively writing with locking and change detection switched off.
+func TestHeaderSaysWAL(t *testing.T) {
+	// makeDB creates a one-table database in the given journal mode.
+	makeDB := func(t *testing.T, mode string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "opencode.db")
+		db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode("+mode+")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`CREATE TABLE t(x)`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	tests := []struct {
+		name string
+		mode string
+		want bool
+	}{
+		{name: "wal database", mode: "WAL", want: true},
+		{name: "rollback journal database", mode: "DELETE", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ing := NewIngester(makeDB(t, tt.mode), newFakeStore(), &fakeSink{})
+			if got := ing.headerSaysWAL(); got != tt.want {
+				t.Errorf("headerSaysWAL() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("a missing file is not WAL", func(t *testing.T) {
+		ing := NewIngester(filepath.Join(t.TempDir(), "absent.db"), newFakeStore(), &fakeSink{})
+		if ing.headerSaysWAL() {
+			t.Error("headerSaysWAL() = true for a file that does not exist")
+		}
+	})
+
+	t.Run("a truncated file is not WAL", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "stub.db")
+		if err := os.WriteFile(p, []byte("SQLite"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ing := NewIngester(p, newFakeStore(), &fakeSink{})
+		if ing.headerSaysWAL() {
+			t.Error("headerSaysWAL() = true for a file too short to have a header")
+		}
+	})
+}
+
+// TestConsecutiveFailuresCountsPolls pins the counter the poll watchdog reads.
+// It must move with polls, not with observations: the watchdog samples on its
+// own clock, and a poll draining a large database cold outlasts many ticks.
+func TestConsecutiveFailuresCountsPolls(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	ing := NewIngester(dbPath, newFakeStore(), &fakeSink{})
+
+	// A database that does not exist is "opencode is not installed", not a
+	// failure, so the counter must stay at zero however often it is read.
+	for i := 0; i < 5; i++ {
+		if err := ing.IngestExisting(context.Background()); err != nil {
+			t.Fatalf("IngestExisting on a missing database: %v", err)
+		}
+	}
+	if got := ing.ConsecutiveFailures(); got != 0 {
+		t.Fatalf("ConsecutiveFailures after 5 no-op polls = %d, want 0", got)
+	}
+
+	// A file that is not a database fails every poll.
+	if err := os.WriteFile(dbPath, []byte("not a database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		if err := ing.IngestExisting(context.Background()); err == nil {
+			t.Fatal("want an error polling a file that is not a database")
+		}
+		if got := ing.ConsecutiveFailures(); got != i {
+			t.Errorf("after %d failed polls: ConsecutiveFailures = %d, want %d", i, got, i)
+		}
+	}
+	// Reading it many times must not advance it — only polling does.
+	for i := 0; i < 10; i++ {
+		if got := ing.ConsecutiveFailures(); got != 3 {
+			t.Fatalf("observing the counter changed it: got %d, want 3", got)
+		}
+	}
+
+	// One good poll clears the streak. Clear the junk file first so the fixture
+	// can create a real database in its place.
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	db := makeFixtureDB(t, dir)
+	defer func() { _ = db.Close() }()
+	insertSession(t, db, "ses1", "/home/user/project")
+	insertMessage(t, db, "msg1", "ses1", 1000, assistantData(10))
+	if err := ing.IngestExisting(context.Background()); err != nil {
+		t.Fatalf("IngestExisting after the database was repaired: %v", err)
+	}
+	if got := ing.ConsecutiveFailures(); got != 0 {
+		t.Errorf("ConsecutiveFailures after a successful poll = %d, want 0", got)
+	}
+	if ing.LastErr() != nil {
+		t.Errorf("LastErr after a successful poll = %v, want nil", ing.LastErr())
 	}
 }

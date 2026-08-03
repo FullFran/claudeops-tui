@@ -260,3 +260,38 @@ func TestTokenMapping(t *testing.T) {
 
 // Compile-time check that MessageData is exported and json.Unmarshal-compatible.
 var _ = json.RawMessage(nil)
+
+// TestBilledCostUSD covers the rule that only a positive reported cost carries
+// information: opencode writes 0 for calls a subscription already paid for.
+func TestBilledCostUSD(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want *float64
+	}{
+		{"positive cost is billed", `{"cost":6.5877}`, ptrf(6.5877)},
+		{"zero cost is a subscription call", `{"cost":0}`, nil},
+		{"absent cost is unknown", `{"role":"assistant"}`, nil},
+		{"negative cost is rejected", `{"cost":-0.5}`, nil},
+		{"tiny positive cost still counts", `{"cost":0.0000001}`, ptrf(0.0000001)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := DecodeMessageData([]byte(tt.json))
+			if err != nil {
+				t.Fatalf("DecodeMessageData: %v", err)
+			}
+			got := d.BilledCostUSD()
+			switch {
+			case tt.want == nil && got != nil:
+				t.Errorf("got %v, want nil", *got)
+			case tt.want != nil && got == nil:
+				t.Errorf("got nil, want %v", *tt.want)
+			case tt.want != nil && *got != *tt.want:
+				t.Errorf("got %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}
+
+func ptrf(v float64) *float64 { return &v }

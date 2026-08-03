@@ -47,11 +47,12 @@ Entry point: `cmd/claudeops/main.go` — subcommand router with variable functio
 ```
 ~/.claude/projects/*.jsonl            (claude)
 $CODEX_HOME/sessions/**/*.jsonl       (codex, default ~/.codex/sessions)
-~/.local/share/opencode/opencode.db   (opencode)
+$XDG_DATA_HOME/opencode/opencode.db   (opencode, default ~/.local/share)
   → collector (fsnotify watcher + 500ms debounce tick, byte offsets in SQLite)
     or opencode.Ingester (5s SQLite poll with a persisted watermark)
   → source.LineParser (parser.ClaudeLineParser / codex.Parser) → []source.Record
-  → source.StoreSink.Emit: pricing.Calculate() → cost in EUR
+  → source.StoreSink.Emit: pricing.Calculator.CostForCacheTTL() → cost in EUR,
+                           overridden by Record.ReportedCostUSD when positive
                            tasks.Resolve()     → optional task attribution
   → store.Insert() (direct call, no queue) → SQLite (WAL)
   → TUI reads aggregates on a 2s tick + usage.Get() for Anthropic subscription %
@@ -62,8 +63,8 @@ $CODEX_HOME/sessions/**/*.jsonl       (codex, default ~/.codex/sessions)
 
 - **parser** — Claude JSONL line decoder. Permissive: unknown event types decode to `UnknownEvent` and the adapter drops them, never errors. Supports format drift.
 - **codex** — Codex rollout (`rollout-*.jsonl`) parser. Token deltas come from `last_token_usage`, falling back to subtracting cumulative `total_token_usage`. `CodexRoot()` resolves `$CODEX_HOME/sessions` (default `~/.codex/sessions`).
-- **opencode** — poller for opencode's SQLite database. Not a Collector: it polls every 5s and persists a watermark in `source_watermarks`.
-- **source** — the ingestion seam: `LineParser`, `LineContext`, `Record`, `Sink`. `StoreSink` applies pricing and task attribution, then calls `store.Insert`.
+- **opencode** — poller for opencode's SQLite database. Not a Collector: it polls every 5s and persists a watermark in `source_watermarks`. `DefaultDBPath()` honors `$XDG_DATA_HOME`. Reads go through `mode=ro`, except when both WAL sidecars are absent — then `immutable=1`, because a plain read-only open recreates `-wal`/`-shm` inside opencode's data directory and fails outright when that directory is not writable. A poll that keeps failing is reported by `supervisePollErrors`; `Watch` itself never returns, so nothing else would notice.
+- **source** — the ingestion seam: `LineParser`, `LineContext`, `Record`, `Sink`. `StoreSink` applies pricing and task attribution, then calls `store.Insert`. `Record.ReportedCostUSD` carries what a source says it was actually billed; a positive value replaces the table-derived estimate, a zero does not (opencode records 0 for calls a subscription already covered, and taking that literally would erase the equivalent-value figure the dashboard is built on).
 - **collector** — fsnotify watcher over one source root. `IngestExisting()` for warm start (resumes from stored byte offsets); `Watch()` ingests existing data, then runs a single event loop that marks files dirty and flushes them on a 500ms ticker. There is no per-file tail goroutine.
 - **store** — SQLite (`modernc.org/sqlite`, WAL, `busy_timeout(5000)`). Events upsert with `ON CONFLICT(uuid) DO UPDATE ... WHERE excluded.out_tokens > events.out_tokens`, so re-ingestion is idempotent and the row carrying the final streaming output count wins. `Open()` for read-write, `OpenReadOnly()` for the MCP server. `ResetIngestedData()` backs `claudeops reingest`.
 - **pricing** — TOML-based per-model token pricing. Embedded seed in `internal/pricing/pricing.seed.toml` (via `go:embed`), copied to `~/.claudeops/pricing.toml` on first run; missing seed models are merged into existing installs without overwriting user-customized values.
@@ -81,7 +82,7 @@ $CODEX_HOME/sessions/**/*.jsonl       (codex, default ~/.codex/sessions)
 
 ### Concurrency Model
 
-- `cmdTUI` starts one goroutine per enabled line-based source collector (claude, codex) plus one for the opencode poller.
+- `cmdTUI` starts one goroutine per enabled line-based source collector (claude, codex), plus two for the opencode poller: one running `Watch`, one watching `ConsecutiveFailures`. `Watch` never returns on a failing poll, so the first cannot see one.
 - Each collector runs a single fsnotify loop; dirty files are re-read sequentially on a 500ms ticker. There is no per-file tail goroutine.
 - **All of those goroutines call `store.Insert` directly.** There is no ingest channel and no dedicated writer goroutine. Write serialization is SQLite's: WAL plus `busy_timeout(5000)`. Keep inserts short and never hold a transaction across I/O.
 - Bubbletea owns its own runtime and ticks every 2s (`tea.Tick`); async work is dispatched as commands that return `Msg` values.

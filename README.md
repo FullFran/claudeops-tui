@@ -357,7 +357,7 @@ Three ways to read the same data, all backed by one shared cache:
 | `~/.claudeops/live/` | hook-written live session sidecars (Classroom tab) |
 | `~/.claude/projects/*.jsonl` | source data — read only |
 | `~/.codex/sessions/**/*.jsonl` | Codex source data — read only (override the parent dir with `CODEX_HOME`) |
-| `~/.local/share/opencode/opencode.db` | opencode source data — read only |
+| `$XDG_DATA_HOME/opencode/opencode.db` | opencode source data — read only (default `~/.local/share`; the conventional path is still probed as a fallback) |
 | `~/.claude/.credentials.json` | OAuth tokens — read always, written only during token refresh, atomic + 0600; locking uses the sidecar `.credentials.json.lock` |
 | `~/.claude/settings.json` | Claude Code settings — claudeops manages only its hook entries and OTel env vars |
 

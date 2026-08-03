@@ -271,14 +271,10 @@ func buildCollectors(sources []config.SourceConfig, sk source.Sink, claudeRoot s
 	return cols
 }
 
-// opencodeDefaultDBPath returns the conventional path to the opencode SQLite DB.
-// It mirrors how opencode itself resolves its data directory.
+// opencodeDefaultDBPath returns the conventional path to the opencode SQLite DB,
+// resolved the way opencode itself resolves its data directory.
 func opencodeDefaultDBPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+	return ocingester.DefaultDBPath()
 }
 
 // resolveSources returns the effective source list. When the user has not
@@ -325,7 +321,10 @@ func dirExists(p string) bool {
 // buildOpencodeIngester builds an opencode Ingester when the opencode source is
 // enabled in sources, or returns nil if it is absent or disabled.
 // s is the claudeops store (used for watermark persistence).
-func buildOpencodeIngester(sources []config.SourceConfig, s *store.Store, sk source.Sink) source.Ingester {
+//
+// It returns the concrete type rather than source.Ingester so callers can reach
+// LastErr, which is how a poll that keeps failing gets reported.
+func buildOpencodeIngester(sources []config.SourceConfig, s *store.Store, sk source.Sink) *ocingester.Ingester {
 	for _, sc := range sources {
 		if sc.Name != "opencode" {
 			continue
@@ -376,7 +375,11 @@ func cmdTUI() error {
 		go superviseEmitErrors(ctx, nc.name, nc.col, &health, stallInterval)
 	}
 	if ocIng != nil {
-		go superviseWatch(ctx, ocIng.Name().String(), ocIng.Watch, &health)
+		name := ocIng.Name().String()
+		go superviseWatch(ctx, name, ocIng.Watch, &health)
+		// Watch never returns on a failing poll, so the watchdog above cannot
+		// see one. This is what does.
+		go supervisePollErrors(ctx, name, ocIng, &health, stallInterval)
 	}
 
 	_, err = prog.Run()

@@ -38,7 +38,7 @@ opencode.db ──5s poll──→ opencode.Ingester ─────────
                                                                         ▼
                                                               source.StoreSink
                                                                         │
-                                              pricing.Calculate ────────┤
+                                    pricing.CostForCacheTTL ────────────┤
                                      tasks.Resolve(_, ts)       ──────┤
                                                                         ▼
                                                           store.Insert ──→ SQLite (WAL)
@@ -55,7 +55,9 @@ usage refresh ────────────────┴─→ POST con
 ## Concurrency model
 
 - `cmdTUI` starts one goroutine per enabled line-based source collector (claude,
-  codex), plus one for the opencode poller.
+  codex), plus two for the opencode poller: one running `Watch`, one watching
+  `ConsecutiveFailures` so a poll that keeps failing is reported. `Watch` never
+  returns on a failing poll, so the first cannot see one.
 - Each collector runs **one** fsnotify event loop. Events mark files dirty; a
   500ms ticker flushes the dirty set by re-reading each file sequentially from
   its persisted offset. There is no goroutine per file.
@@ -119,7 +121,7 @@ the transaction opens, so it produces no WAL frame.
 |---|---|---|
 | `~/.claude/projects/*/` | Claude Code | source data — read only |
 | `~/.codex/sessions/**` | Codex CLI | source data — read only (parent dir overridable with `CODEX_HOME`) |
-| `~/.local/share/opencode/opencode.db` | opencode | source data — read only |
+| `$XDG_DATA_HOME/opencode/opencode.db` | opencode | source data — read only (default `~/.local/share`; the conventional path is probed as a fallback) |
 | `~/.claude/.credentials.json` | Claude Code (shared) | OAuth tokens — locked, atomic refresh only |
 | `~/.claude/.credentials.json.lock` | claudeops | advisory lock sidecar |
 | `~/.claude/settings.json` | Claude Code (shared) | claudeops manages only its hook entries and OTel env vars |

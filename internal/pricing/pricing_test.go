@@ -4,6 +4,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -417,5 +419,59 @@ func TestLoadOrSeedKeepsCurrentFileUntouchedWhenSeedModelsAlreadyExist(t *testin
 	}
 	if string(after) != original {
 		t.Fatal("expected current pricing file to remain untouched when no merge is needed")
+	}
+}
+
+// TestEURPerUSDMatchesTheGeneratorFactor pins the constant to the script that
+// produced the numbers it has to be consistent with.
+//
+// Every price in this package is EUR, produced by multiplying LiteLLM's USD
+// list by EUR_FACTOR in scripts/update-pricing.sh. EURFromUSD applies the same
+// idea at ingest time to a figure a source reports it was billed. If the two
+// drift, cost_eur ends up holding two currencies at once — a table generated
+// with EUR_FACTOR=1.0, which the script documents as a supported workflow,
+// against reported costs still scaled by 0.92 — and nothing else in the suite
+// would notice.
+func TestEURPerUSDMatchesTheGeneratorFactor(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "update-pricing.sh"))
+	if err != nil {
+		t.Fatalf("reading the pricing generator: %v", err)
+	}
+	// EUR_FACTOR="${EUR_FACTOR:-0.92}"
+	re := regexp.MustCompile(`EUR_FACTOR="\$\{EUR_FACTOR:-([0-9.]+)\}"`)
+	m := re.FindSubmatch(b)
+	if m == nil {
+		t.Fatal("could not find the EUR_FACTOR default in scripts/update-pricing.sh; " +
+			"if its shape changed, update this test rather than deleting it")
+	}
+	want, err := strconv.ParseFloat(string(m[1]), 64)
+	if err != nil {
+		t.Fatalf("EUR_FACTOR default %q is not a number: %v", m[1], err)
+	}
+	if EURPerUSD != want {
+		t.Errorf("EURPerUSD = %v but scripts/update-pricing.sh defaults EUR_FACTOR to %v; "+
+			"a table generated with one and reported costs converted with the other "+
+			"put two currencies in the same column", EURPerUSD, want)
+	}
+}
+
+// TestEURFromUSD covers the conversion itself with values the constant cannot
+// trivially satisfy.
+func TestEURFromUSD(t *testing.T) {
+	tests := []struct {
+		name string
+		usd  float64
+		want float64
+	}{
+		{name: "zero converts to zero", usd: 0, want: 0},
+		{name: "one dollar", usd: 1, want: EURPerUSD},
+		{name: "a real zen charge", usd: 6.5877, want: 6.5877 * EURPerUSD},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EURFromUSD(tt.usd); got != tt.want {
+				t.Errorf("EURFromUSD(%v) = %v, want %v", tt.usd, got, tt.want)
+			}
+		})
 	}
 }

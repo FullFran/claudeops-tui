@@ -87,7 +87,28 @@ func (ss *StoreSink) Emit(ctx context.Context, r Record) error {
 	if ss.calc != nil && r.Model != "" {
 		cost = ss.calc.CostForCacheTTL(r.Model, r.In, r.Out, r.CacheRead, r.CacheCreate, r.CacheCreate1h)
 	}
+	if billed := billedCostEUR(r); billed != nil {
+		cost = billed
+	}
 
 	taskID := ss.tasks.Resolve(r.SessionID, r.TS)
 	return ss.store.Insert(ctx, ev, cost, taskID)
+}
+
+// billedCostEUR converts a source-reported cost into EUR, or returns nil when
+// the estimate should be kept instead.
+//
+// Only a positive report wins. A zero is not the same claim as a positive one:
+// a tool that routes through a subscription the user already paid for records
+// 0 for that call, because no incremental money changed hands. Taking it
+// literally would erase the equivalent-API-value figure this dashboard exists
+// to show, and would do it precisely for the traffic that dominates it. So a
+// reported 0 falls back to the price table, and only an amount the source says
+// it actually charged replaces the estimate.
+func billedCostEUR(r Record) *float64 {
+	if r.ReportedCostUSD == nil || *r.ReportedCostUSD <= 0 {
+		return nil
+	}
+	eur := pricing.EURFromUSD(*r.ReportedCostUSD)
+	return &eur
 }
