@@ -206,7 +206,10 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 
 	versionOut, err := u.Runner.Run(ctx, decision.ExpectedPath, "version")
 	if err == nil {
-		decision.InstalledNow = strings.TrimSpace(string(versionOut))
+		// `claudeops version` prints commit and build date beneath the version
+		// line. Only the first line is the contract we parse — keeping the rest
+		// would make the build date look like the version.
+		decision.InstalledNow = firstLine(string(versionOut))
 	}
 
 	// Guard against the module proxy serving a stale (older) version.
@@ -224,13 +227,21 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 	return decision, nil
 }
 
-// extractSemver pulls the version string out of "claudeops X.Y.Z".
+// extractSemver pulls the version string out of "claudeops X.Y.Z". It reads the
+// second field rather than the last so anything appended to the line later is
+// ignored instead of being mistaken for the version.
 func extractSemver(s string) string {
 	parts := strings.Fields(s)
 	if len(parts) >= 2 {
-		return parts[len(parts)-1]
+		return parts[1]
 	}
 	return ""
+}
+
+// firstLine returns the first non-empty line of s, trimmed.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(line)
 }
 
 // semverLT returns true when a < b (simple major.minor.patch comparison).

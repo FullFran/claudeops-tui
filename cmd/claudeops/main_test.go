@@ -3,19 +3,46 @@ package main
 import (
 	"io"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/fullfran/claudeops-tui/internal/buildinfo"
 )
 
+// The first line of `claudeops version` is a contract, not cosmetics:
+// internal/update runs the freshly installed binary and parses that line to
+// confirm the proxy did not serve a stale release. Build metadata goes on the
+// lines below it, where it cannot be mistaken for the version.
 func TestRunArgsVersionPrintsReleaseVersion(t *testing.T) {
 	got := captureStdout(t, func() error {
 		return runArgs([]string{"version"})
 	})
-	want := "claudeops " + version + "\n"
-	if got != want {
-		t.Fatalf("version output = %q, want %q", got, want)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+
+	want := "claudeops " + version
+	if lines[0] != want {
+		t.Fatalf("first line = %q, want %q", lines[0], want)
 	}
 	if version == "" {
-		t.Fatal("version constant must not be empty")
+		t.Fatal("version must not be empty")
+	}
+	if len(lines) != 3 {
+		t.Fatalf("version output = %q, want 3 lines", got)
+	}
+	if !strings.HasPrefix(lines[1], "commit: ") {
+		t.Fatalf("second line = %q, want a commit line", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "built: ") {
+		t.Fatalf("third line = %q, want a built line", lines[2])
+	}
+}
+
+// A `go build` of this source tree reports the version baked into buildinfo.
+// If those two ever disagree the release workflow's tag check is checking the
+// wrong thing.
+func TestVersionComesFromBuildinfo(t *testing.T) {
+	if version != buildinfo.Version() {
+		t.Fatalf("version = %q, want buildinfo.Version() = %q", version, buildinfo.Version())
 	}
 }
 

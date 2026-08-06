@@ -1,0 +1,111 @@
+# GoReleaser builds and publishes every claudeops release.
+#
+# The release workflow is the only place this runs for real; locally you get the
+# same artifacts without publishing anything via `make snapshot`.
+#
+# Two invariants this file exists to protect:
+#   1. The published binary reports the tag it was built from. Version, commit
+#      and date are injected into internal/buildinfo at link time.
+#   2. What ships is reproducible from the tag alone — CGO off, -trimpath on,
+#      checksums for every artifact.
+version: 2
+
+project_name: claudeops
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: claudeops
+    main: ./cmd/claudeops
+    binary: claudeops
+
+    # Pure Go, including modernc.org/sqlite. Keeping CGO off is what makes
+    # cross-compiling to five platforms from one Linux runner possible at all.
+    env:
+      - CGO_ENABLED=0
+
+    flags:
+      - -trimpath
+
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/fullfran/claudeops-tui/internal/buildinfo.version={{ .Version }}
+        -X github.com/fullfran/claudeops-tui/internal/buildinfo.commit={{ .ShortCommit }}
+        -X github.com/fullfran/claudeops-tui/internal/buildinfo.date={{ .Date }}
+
+    goos:
+      - linux
+      - darwin
+      - windows
+
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    ids:
+      - claudeops
+
+    formats:
+      - tar.gz
+
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  # Release notes are for people deciding whether to upgrade. Housekeeping
+  # commits are not that.
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^style:"
+      - "^refactor:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  draft: false
+  # Tags like v0.14.0-rc.1 publish as prereleases automatically.
+  prerelease: auto
+  footer: |
+    ## Install
+
+    Download the archive for your platform above, or:
+
+    ```bash
+    go install github.com/fullfran/claudeops-tui/cmd/claudeops@{{ .Tag }}
+    ```
+
+    Verify a download against `checksums.txt`:
+
+    ```bash
+    sha256sum -c checksums.txt --ignore-missing
+    ```

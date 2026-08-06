@@ -47,3 +47,23 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12
+
+  # A broken .goreleaser.yaml is only discovered when a tag is pushed, which is
+  # the worst moment to discover it. Validate it like any other source file.
+  goreleaser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check release config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

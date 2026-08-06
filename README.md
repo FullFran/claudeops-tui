@@ -57,9 +57,37 @@ stateDiagram-v2
 
 ## Install
 
+### Prebuilt binary (no Go required)
+
+Every release ships signed-by-checksum archives for Linux, macOS and Windows on
+both amd64 and arm64. Grab one from
+[Releases](https://github.com/fullfran/claudeops-tui/releases/latest), or:
+
+```bash
+# Linux / macOS — resolves the latest release and the archive for your platform
+VERSION=$(curl -fsSL https://api.github.com/repos/fullfran/claudeops-tui/releases/latest \
+  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -fsSL "https://github.com/fullfran/claudeops-tui/releases/download/v${VERSION}/claudeops_${VERSION}_${OS}_${ARCH}.tar.gz" \
+  | tar -xz claudeops
+sudo install -m 0755 claudeops /usr/local/bin/claudeops
+```
+
+Verify what you downloaded against the release's `checksums.txt`:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+```
+
+### With Go
+
 ```bash
 go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
 ```
+
+This is also what `claudeops update` uses, so it is the better path if you want
+in-place self-updates.
 
 ### Update
 
@@ -482,6 +510,7 @@ drill-downs, computed insights, live Classroom, MCP server, and OTLP export.
 - [`plugins/opencode/`](./plugins/opencode) — the same, beside the opencode prompt
 - [`docs/jsonl-format.md`](./docs/jsonl-format.md) — observed Claude Code and Codex event shapes
 - [`docs/oauth-usage-endpoint.md`](./docs/oauth-usage-endpoint.md) — endpoint reference
+- [`docs/RELEASING.md`](./docs/RELEASING.md) — how a release is cut, tagged, and published
 - [`docs/limitations.md`](./docs/limitations.md) — what's broken, fragile, or missing
 - [`docs/plan.md`](./docs/plan.md) — original vision and phasing (historical)
 

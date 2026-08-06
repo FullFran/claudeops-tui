@@ -202,6 +202,54 @@ func TestUpdateRunsInstallAndVerifiesInstalledVersion(t *testing.T) {
 	}
 }
 
+// Since v0.14.0 `claudeops version` prints commit and build date under the
+// version line. Only the first line is the contract; parsing the whole output
+// would read the build date as the version and wrongly report a stale proxy.
+func TestUpdateReadsOnlyTheFirstLineOfVersionOutput(t *testing.T) {
+	runner := &fakeRunner{
+		execPath: "/tmp/go/bin/claudeops",
+		goPath:   "/usr/bin/go",
+		goEnv: Env{
+			GOBIN: "/tmp/go/bin",
+		},
+		runResults: map[string]fakeRunResult{
+			runKey("go", "install", InstallTarget): {out: []byte("ok")},
+			runKey("/tmp/go/bin/claudeops", "version"): {
+				out: []byte("claudeops 0.2.0\ncommit: abc1234\nbuilt: 2026-08-06T11:00:00Z\n"),
+			},
+		},
+	}
+
+	decision, err := New("0.1.0").withRunner(runner).Update(context.Background())
+	if err != nil {
+		t.Fatalf("multi-line version output must not fail the staleness check: %v", err)
+	}
+	if decision.InstalledNow != "claudeops 0.2.0" {
+		t.Fatalf("unexpected installed version: %q", decision.InstalledNow)
+	}
+}
+
+func TestExtractSemver(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain version line", in: "claudeops 0.2.0", want: "0.2.0"},
+		{name: "trailing metadata is ignored", in: "claudeops 0.2.0 (dirty)", want: "0.2.0"},
+		{name: "empty", in: "", want: ""},
+		{name: "single field", in: "claudeops", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractSemver(tt.in); got != tt.want {
+				t.Fatalf("extractSemver(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUpdateReturnsManualErrorWhenUnsafe(t *testing.T) {
 	runner := &fakeRunner{
 		execPath: "/opt/claudeops/claudeops",
