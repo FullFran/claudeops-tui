@@ -1,8 +1,10 @@
 name: release
 
-# Build cross-platform binaries and publish a GitHub Release whenever a
-# version tag (vX.Y.Z) is pushed. Keeps tags and Releases in sync — no more
-# tagging without a matching Release.
+# Publish a GitHub Release whenever a version tag (vX.Y.Z) is pushed.
+#
+# GitHub Actions is the only publishing authority — never run
+# `goreleaser release` against this repo from a laptop. Locally you validate
+# with `make snapshot`, which produces the same artifacts and publishes nothing.
 on:
   push:
     tags:
@@ -14,30 +16,50 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # GoReleaser builds the changelog from history; a shallow clone has none.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
-      - name: Test
-        run: go test ./...
-
-      - name: Build binaries
+      # A release build takes its version from the tag via ldflags, but a
+      # `go install ...@latest` build takes it from buildinfo.defaultVersion.
+      # If those disagree, half the users of a release report the wrong version
+      # and the self-update check compares against a version that never shipped.
+      # Cheaper to fail here than to yank a tag.
+      - name: Verify version matches tag
         run: |
-          mkdir -p dist
-          version="${GITHUB_REF_NAME}"
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            os="${target%/*}"; arch="${target#*/}"; ext=""
-            [ "$os" = "windows" ] && ext=".exe"
-            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-              go build -ldflags "-s -w" \
-              -o "dist/claudeops-${version}-${os}-${arch}${ext}" ./cmd/claudeops
-          done
+          # A prerelease tag (v0.14.0-rc.1) is cut from the same source tree as
+          # the release it rehearses, so compare base versions only.
+          want="${GITHUB_REF_NAME#v}"
+          want="${want%%-*}"
+          # awk, not `head -1`: head closes the pipe early, `go run` takes
+          # SIGPIPE, and the step fails for a reason that has nothing to do
+          # with the version.
+          got="$(go run ./cmd/claudeops version | awk 'NR==1 {print $2}')"
+          if [ "$want" != "$got" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match the version in the source tree (${got})."
+            echo "Bump defaultVersion in internal/buildinfo/buildinfo.go, commit, then retag."
+            exit 1
+          fi
+          echo "version ${got} matches tag ${GITHUB_REF_NAME}"
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - name: Test (race)
+        run: go test -race ./...
+
+      - name: Release
+        uses: goreleaser/goreleaser-action@v6
         with:
-          generate_release_notes: true
-          files: dist/*
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          # The workflow-scoped token is enough to create a Release in this
+          # repo. No PAT needed.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
