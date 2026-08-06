@@ -18,6 +18,7 @@
 package buildinfo
 
 import (
+	"regexp"
 	"runtime/debug"
 	"strings"
 )
@@ -53,12 +54,38 @@ func resolveVersion(ldflags, module string) string {
 	if v := normalize(ldflags); v != "" {
 		return v
 	}
-	// "(devel)" is what the toolchain records for a build that is not pinned to
-	// a module version, which tells us nothing the source tree does not already.
-	if v := normalize(module); v != "" && v != "(devel)" {
+	if v := normalize(module); isReleaseVersion(v) {
 		return v
 	}
 	return defaultVersion
+}
+
+// pseudoVersion matches the timestamp-and-commit tail the Go toolchain appends
+// when it derives a version from VCS state rather than a tag.
+var pseudoVersion = regexp.MustCompile(`[0-9]{14}-[0-9a-f]{12}`)
+
+// isReleaseVersion reports whether v is a version someone actually tagged.
+//
+// Only `go install ...@vX.Y.Z` records one. A `go build` inside a git checkout
+// records a pseudo-version instead — `0.13.2-0.20260806113558-8abf581c650b`,
+// possibly with `+dirty` — which is derived from the commit, not published.
+// Reporting that would be actively harmful: it parses as newer than the latest
+// release, so `claudeops update` reads a source build as being ahead of every
+// published version and refuses to install one, calling it a downgrade.
+//
+// "(devel)" is the same story with less detail. All of them fall back to the
+// version this source tree claims to be.
+func isReleaseVersion(v string) bool {
+	switch {
+	case v == "", v == "(devel)":
+		return false
+	// Build metadata (+dirty, +incompatible) never appears on a plain tag.
+	case strings.Contains(v, "+"):
+		return false
+	case pseudoVersion.MatchString(v):
+		return false
+	}
+	return true
 }
 
 func resolveCommit(ldflags, vcs string) string {

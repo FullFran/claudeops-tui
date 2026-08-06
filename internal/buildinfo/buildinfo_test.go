@@ -35,6 +35,47 @@ func TestResolveVersion(t *testing.T) {
 			module: "(devel)",
 			want:   defaultVersion,
 		},
+		// `go build` inside a git checkout stamps a pseudo-version derived from
+		// the commit, not a released version. Reporting it would make a source
+		// build look newer than the latest release, and `claudeops update`
+		// refuses to "downgrade" onto a real release when that happens.
+		{
+			name:   "pseudo-version from a source build is rejected",
+			module: "v0.13.2-0.20260806113558-8abf581c650b",
+			want:   defaultVersion,
+		},
+		{
+			name:   "dirty pseudo-version is rejected",
+			module: "v0.13.2-0.20260806113558-8abf581c650b+dirty",
+			want:   defaultVersion,
+		},
+		{
+			name:   "untagged pseudo-version is rejected",
+			module: "v0.0.0-20260806113558-8abf581c650b",
+			want:   defaultVersion,
+		},
+		{
+			name:   "build metadata is rejected",
+			module: "v2.0.0+incompatible",
+			want:   defaultVersion,
+		},
+		{
+			name:   "a real release tag is accepted",
+			module: "v0.13.1",
+			want:   "0.13.1",
+		},
+		{
+			name:   "a real prerelease tag is accepted",
+			module: "v0.14.0-rc.1",
+			want:   "0.14.0-rc.1",
+		},
+		// ldflags come from GoReleaser, which only ever passes a real tag. It is
+		// trusted as-is so a deliberate override is never second-guessed.
+		{
+			name:    "ldflags are trusted even when odd",
+			ldflags: "v0.13.2-0.20260806113558-8abf581c650b+dirty",
+			want:    "0.13.2-0.20260806113558-8abf581c650b+dirty",
+		},
 		{
 			name: "nothing known falls back to default",
 			want: defaultVersion,
