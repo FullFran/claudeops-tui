@@ -21,6 +21,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/fullfran/claudeops-tui/internal/buildinfo"
 	"github.com/fullfran/claudeops-tui/internal/codex"
 	"github.com/fullfran/claudeops-tui/internal/collector"
 	"github.com/fullfran/claudeops-tui/internal/config"
@@ -38,7 +39,10 @@ import (
 	"github.com/fullfran/claudeops-tui/internal/usage"
 )
 
-const version = "0.13.1"
+// version is resolved at startup from build metadata: ldflags in a release
+// build, the module version under `go install`, and the baked default for a
+// source build. See internal/buildinfo.
+var version = buildinfo.Version()
 
 func main() {
 	if err := run(); err != nil {
@@ -69,7 +73,11 @@ func runArgs(args []string) error {
 	}
 	switch args[0] {
 	case "version", "-v", "--version":
+		// The first line is parsed by the self-update check. Keep it exactly
+		// "claudeops X.Y.Z" and put everything else underneath.
 		fmt.Println("claudeops", version)
+		fmt.Println("commit:", buildinfo.Commit())
+		fmt.Println("built:", buildinfo.Date())
 		return nil
 	case "mcp":
 		return runMCPCommand()
