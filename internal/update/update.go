@@ -64,6 +64,18 @@ func (OSRunner) Run(ctx context.Context, name string, args ...string) ([]byte, e
 	return cmd.CombinedOutput()
 }
 
+// Method is how this installation updates itself.
+type Method string
+
+const (
+	// MethodGoInstall re-runs `go install`, which is correct only when the
+	// running binary is the one go install manages.
+	MethodGoInstall Method = "go install"
+	// MethodBinary replaces the running executable with the published release
+	// archive. This is how anyone who downloaded a binary updates.
+	MethodBinary Method = "binary"
+)
+
 type Decision struct {
 	CanAuto        bool
 	Reason         string
@@ -72,6 +84,11 @@ type Decision struct {
 	ExecutablePath string
 	ExpectedPath   string
 	InstalledNow   string
+
+	// Method is how an automatic update would be performed. It is meaningful
+	// even when CanAuto is false: it says which path was chosen and therefore
+	// what Reason is talking about.
+	Method Method
 
 	// LatestVersion is what the module proxy reports, without the leading "v".
 	// Empty when the proxy could not be reached — that is not fatal, it just
@@ -92,6 +109,17 @@ type Updater struct {
 	Binary  string
 	// Fetcher resolves the newest published version. Nil uses the public proxy.
 	Fetcher LatestFetcher
+	// Installer replaces the running binary from a published release archive.
+	// Nil uses BinaryInstaller against the real GitHub release downloads.
+	Installer BinaryUpdater
+	// IsWritable reports whether the running binary can be replaced in place.
+	// Nil probes the real filesystem.
+	IsWritable func(execPath string) error
+}
+
+// BinaryUpdater installs a published release over the running executable.
+type BinaryUpdater interface {
+	Install(ctx context.Context, version, execPath string) error
 }
 
 func New(version string) Updater {
@@ -137,39 +165,72 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 	if err == nil {
 		decision.ExecutablePath = execPath
 	}
-
-	if _, err := u.Runner.LookPath("go"); err != nil {
-		decision.Reason = "Go is not available on PATH"
-		return decision, nil
-	}
-
-	env, err := u.Runner.GoEnv(ctx)
-	if err != nil {
-		decision.Reason = "Could not determine Go install directories"
-		return decision, nil
-	}
-
-	expectedPath := expectedBinaryPath(env, u.Binary)
-	if expectedPath == "" {
-		decision.Reason = "Could not determine target install path for `go install`"
-		return decision, nil
-	}
-	decision.ExpectedPath = expectedPath
-
 	if decision.ExecutablePath == "" {
 		decision.Reason = "Could not determine current executable path"
 		return decision, nil
 	}
 
-	resolvedExec := resolveOrClean(u.Runner, decision.ExecutablePath)
-	resolvedExpected := resolveOrClean(u.Runner, expectedPath)
-	if resolvedExec != resolvedExpected {
-		decision.Reason = fmt.Sprintf("current executable is %s, but `go install` would write %s", decision.ExecutablePath, expectedPath)
+	// `go install` is the right tool for exactly one installation: the binary it
+	// would itself overwrite. Anywhere else it writes a second copy into GOBIN
+	// and leaves this one untouched, so the update reports success and changes
+	// nothing the user runs.
+	if expected, ok := u.goInstallTarget(ctx); ok {
+		decision.ExpectedPath = expected
+		if resolveOrClean(u.Runner, decision.ExecutablePath) == resolveOrClean(u.Runner, expected) {
+			decision.Method = MethodGoInstall
+			decision.CanAuto = true
+			return decision, nil
+		}
+	}
+
+	// Everything else — a downloaded release archive, a binary copied onto
+	// PATH, a machine with no Go at all — updates by replacing this file with
+	// the published release for its platform.
+	decision.Method = MethodBinary
+	decision.InstallCommand = "claudeops update"
+
+	if err := u.writable()(decision.ExecutablePath); err != nil {
+		decision.InstallCommand = releasesPage
+		decision.Reason = fmt.Sprintf(
+			"%s is not writable by this user; re-run with sudo, or reinstall claudeops somewhere you own",
+			filepath.Dir(decision.ExecutablePath))
 		return decision, nil
 	}
 
 	decision.CanAuto = true
 	return decision, nil
+}
+
+// releasesPage is where a human goes when no automatic path is available.
+const releasesPage = "https://github.com/fullfran/claudeops-tui/releases/latest"
+
+// goInstallTarget reports the path `go install` would write, when Go is
+// available at all. A missing toolchain is not a failure any more — it just
+// means this installation updates the other way.
+func (u Updater) goInstallTarget(ctx context.Context) (string, bool) {
+	if _, err := u.Runner.LookPath("go"); err != nil {
+		return "", false
+	}
+	env, err := u.Runner.GoEnv(ctx)
+	if err != nil {
+		return "", false
+	}
+	path := expectedBinaryPath(env, u.Binary)
+	return path, path != ""
+}
+
+func (u Updater) writable() func(string) error {
+	if u.IsWritable != nil {
+		return u.IsWritable
+	}
+	return Writable
+}
+
+func (u Updater) installer() BinaryUpdater {
+	if u.Installer != nil {
+		return u.Installer
+	}
+	return BinaryInstaller{}
 }
 
 func (u Updater) Update(ctx context.Context) (Decision, error) {
@@ -193,6 +254,10 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 	}
 	if decision.UpToDate {
 		return decision, nil
+	}
+
+	if decision.Method == MethodBinary {
+		return u.updateBinary(ctx, decision)
 	}
 
 	output, err := u.Runner.Run(ctx, "go", "install", u.Target)
@@ -224,6 +289,26 @@ func (u Updater) Update(ctx context.Context) (Decision, error) {
 		}
 	}
 
+	return decision, nil
+}
+
+// updateBinary replaces the running executable with the published release.
+//
+// It needs to know which version to fetch, and the only answer it has is the
+// one Decide resolved. Without it there is no asset name to request, so this
+// stops rather than guessing.
+func (u Updater) updateBinary(ctx context.Context, decision Decision) (Decision, error) {
+	if decision.LatestVersion == "" {
+		return decision, fmt.Errorf(
+			"%w: could not reach the release index to find out what to download\n"+
+				"download manually: %s", ErrManual, releasesPage)
+	}
+
+	if err := u.installer().Install(ctx, decision.LatestVersion, decision.ExecutablePath); err != nil {
+		return decision, fmt.Errorf("automatic update failed: %w\ndownload manually: %s", err, releasesPage)
+	}
+
+	decision.InstalledNow = "claudeops " + decision.LatestVersion
 	return decision, nil
 }
 

@@ -86,20 +86,30 @@ sha256sum -c checksums.txt --ignore-missing
 go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
 ```
 
-This is also what `claudeops update` uses, so it is the better path if you want
-in-place self-updates.
-
 ### Update
 
-Preferred path when `claudeops` was installed with `go install`:
+Either way you installed it:
 
 ```bash
 claudeops update
 ```
 
-If automatic update is not safe for your installation, the command fails with a clear reason and prints the manual command.
+The command works out which kind of installation it is and updates accordingly:
 
-Manual update remains:
+| Installation | What `claudeops update` does |
+|---|---|
+| `go install` | re-runs `go install`, which is the thing that owns that binary |
+| Downloaded archive | downloads the release for your platform, verifies it against the release's `checksums.txt`, and replaces the running binary in place |
+
+`claudeops update --check` reports the published version and which of the two
+it would use, without changing anything.
+
+If the binary lives somewhere you cannot write — `/usr/local/bin` usually
+belongs to root — the update stops and says so rather than escalating
+privileges on its own. Re-run it with `sudo`, or keep claudeops in a directory
+you own.
+
+Manual update, for a Go installation:
 
 ```bash
 go install github.com/fullfran/claudeops-tui/cmd/claudeops@latest
