@@ -122,6 +122,11 @@ type Updater struct {
 	// Nil probes the real filesystem.
 	IsWritable func(execPath string) error
 
+	// ReleaseFetcher resolves what MethodBinary can install. It asks GitHub
+	// Releases, where the archives live, rather than the module proxy, which
+	// only knows that a tag exists. Nil falls back to Fetcher.
+	ReleaseFetcher LatestFetcher
+
 	// SourceBuild marks a binary built from a working tree rather than
 	// installed from a release. Such a binary is someone's work in progress,
 	// and it always looks outdated — its version falls back to whatever the
@@ -137,11 +142,49 @@ type BinaryUpdater interface {
 
 func New(version string) Updater {
 	return Updater{
-		Runner:  OSRunner{},
-		Version: version,
-		Target:  InstallTarget,
-		Binary:  "claudeops",
-		Fetcher: ProxyFetcher{},
+		Runner:         OSRunner{},
+		Version:        version,
+		Target:         InstallTarget,
+		Binary:         "claudeops",
+		Fetcher:        ProxyFetcher{},
+		ReleaseFetcher: GitHubFetcher{},
+	}
+}
+
+// resolveLatest fills in what is published, using the source the chosen method
+// would actually install from.
+//
+// The two disagree routinely, and each is only authoritative for its own
+// method: the proxy indexes git tags, which exist before their archives are
+// built and for releases that never produced any, while GitHub Releases knows
+// nothing about what `go install` can fetch. Asking the wrong one is how a
+// binary install gets offered a version it can only 404 on.
+//
+// A source that cannot be reached is not an error. It leaves LatestVersion
+// empty, and the caller decides what that means for its method.
+func (u Updater) resolveLatest(ctx context.Context, decision *Decision) {
+	fetcher := u.Fetcher
+	if decision.Method == MethodBinary && u.ReleaseFetcher != nil {
+		fetcher = u.ReleaseFetcher
+	}
+	if fetcher == nil {
+		return
+	}
+
+	rel, err := fetcher.Latest(ctx)
+	if err != nil {
+		return
+	}
+	latest := strings.TrimPrefix(rel.Version, "v")
+	decision.LatestVersion = latest
+	switch {
+	case semverLT(u.Version, latest):
+		// newer is available; both flags stay false
+	case latest == u.Version:
+		decision.UpToDate = true
+	default:
+		decision.UpToDate = true
+		decision.Downgrade = true
 	}
 }
 
@@ -152,34 +195,13 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 		InstallCommand: "go install " + u.Target,
 	}
 
-	// What is published is worth knowing even when this install cannot update
-	// itself — "there is a new version, here is the command" is still the
-	// answer. So resolve it before any of the early returns below.
-	//
-	// A proxy that cannot be reached is not an error. It leaves LatestVersion
-	// empty, and the install proceeds blind exactly as it always did.
-	if u.Fetcher != nil {
-		if rel, err := u.Fetcher.Latest(ctx); err == nil {
-			latest := strings.TrimPrefix(rel.Version, "v")
-			decision.LatestVersion = latest
-			switch {
-			case semverLT(u.Version, latest):
-				// newer is available; both flags stay false
-			case latest == u.Version:
-				decision.UpToDate = true
-			default:
-				decision.UpToDate = true
-				decision.Downgrade = true
-			}
-		}
-	}
-
 	execPath, err := u.Runner.Executable()
 	if err == nil {
 		decision.ExecutablePath = execPath
 	}
 	if decision.ExecutablePath == "" {
 		decision.Reason = "Could not determine current executable path"
+		u.resolveLatest(ctx, &decision)
 		return decision, nil
 	}
 
@@ -191,6 +213,7 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 		decision.ExpectedPath = expected
 		if resolveOrClean(u.Runner, decision.ExecutablePath) == resolveOrClean(u.Runner, expected) {
 			decision.Method = MethodGoInstall
+			u.resolveLatest(ctx, &decision)
 			decision.CanAuto = true
 			return decision, nil
 		}
@@ -201,6 +224,7 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 	// the published release for its platform.
 	decision.Method = MethodBinary
 	decision.InstallCommand = "claudeops update"
+	u.resolveLatest(ctx, &decision)
 
 	// `go install` refused to touch anything outside GOBIN, which incidentally
 	// protected a developer's own build. Binary replacement has no such limit,
