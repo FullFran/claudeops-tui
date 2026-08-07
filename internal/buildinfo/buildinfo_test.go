@@ -167,3 +167,27 @@ func TestExportedAccessorsNeverReturnEmpty(t *testing.T) {
 		t.Fatal("Date() must not be empty")
 	}
 }
+
+func TestIsSourceBuild(t *testing.T) {
+	tests := []struct {
+		name    string
+		ldflags string
+		module  string
+		want    bool
+	}{
+		{name: "goreleaser build carries ldflags", ldflags: "0.14.0", module: "", want: false},
+		{name: "go install at a tag", ldflags: "", module: "v0.14.0", want: false},
+		{name: "go build in a checkout", ldflags: "", module: "v0.14.1-0.20260806113558-8abf581c650b", want: true},
+		{name: "dirty checkout", ldflags: "", module: "v0.14.1-0.20260806113558-8abf581c650b+dirty", want: true},
+		{name: "devel", ldflags: "", module: "(devel)", want: true},
+		{name: "no build info at all", ldflags: "", module: "", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSourceBuild(tt.ldflags, tt.module); got != tt.want {
+				t.Fatalf("isSourceBuild(%q, %q) = %v, want %v", tt.ldflags, tt.module, got, tt.want)
+			}
+		})
+	}
+}
