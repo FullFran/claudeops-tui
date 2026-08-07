@@ -44,6 +44,9 @@ func cmdUpdate(args []string) error {
 			fmt.Printf("update available: %s\n", decision.LatestVersion)
 			fmt.Printf("  %s\n", decision.InstallCommand)
 		}
+		if decision.Method != "" {
+			fmt.Printf("update method: %s\n", updateMethodLabel(decision.Method))
+		}
 		if !decision.CanAuto && decision.Reason != "" {
 			fmt.Printf("note: automatic update unavailable — %s\n", decision.Reason)
 		}
@@ -61,7 +64,11 @@ func cmdUpdate(args []string) error {
 			fmt.Println("already up to date")
 			return nil
 		}
-		fmt.Printf("update command: %s\n", decision.InstallCommand)
+		if decision.Method == selfupdate.MethodBinary {
+			fmt.Printf("replaced %s with the published release\n", decision.ExecutablePath)
+		} else {
+			fmt.Printf("update command: %s\n", decision.InstallCommand)
+		}
 		fmt.Println("update complete")
 		if decision.InstalledNow != "" {
 			fmt.Printf("installed version: %s\n", decision.InstalledNow)
@@ -85,10 +92,24 @@ func cmdUpdate(args []string) error {
 		}
 		fmt.Println("manual update:")
 		fmt.Printf("  %s\n", decision.InstallCommand)
-		fmt.Println("if `@latest` still resolves to an older commit, retry with:")
-		fmt.Printf("  GOPROXY=direct %s\n", decision.InstallCommand)
-		fmt.Println("if `claudeops` is not on PATH afterwards, add `$(go env GOPATH)/bin` or your `GOBIN` to PATH")
+		// The GOPROXY and PATH advice below is about `go install`, and telling
+		// it to someone updating a downloaded binary is how they end up with a
+		// second copy in GOBIN while the one they run stays where it was.
+		if decision.Method != selfupdate.MethodBinary {
+			fmt.Println("if `@latest` still resolves to an older commit, retry with:")
+			fmt.Printf("  GOPROXY=direct %s\n", decision.InstallCommand)
+			fmt.Println("if `claudeops` is not on PATH afterwards, add `$(go env GOPATH)/bin` or your `GOBIN` to PATH")
+		}
 	}
 
 	return err
+}
+
+// updateMethodLabel explains a method in the terms a user cares about: where
+// the new binary comes from and what it will touch.
+func updateMethodLabel(m selfupdate.Method) string {
+	if m == selfupdate.MethodBinary {
+		return "replace this binary with the published release archive"
+	}
+	return "go install (this binary is managed by the Go toolchain)"
 }

@@ -135,7 +135,11 @@ func TestDecideAutoWhenExecutableMatchesGopathBin(t *testing.T) {
 	}
 }
 
-func TestDecideManualWhenExecutableIsOutsideGoBin(t *testing.T) {
+// The binary a user downloaded to /usr/local/bin is not the one `go install`
+// manages. It used to be told to run `go install`, which would have written a
+// second copy into GOBIN and left this one at the old version. It now updates
+// itself in place.
+func TestDecideUsesBinaryReplacementOutsideGoBin(t *testing.T) {
 	runner := &fakeRunner{
 		execPath: "/usr/local/bin/claudeops",
 		goPath:   "/usr/bin/go",
@@ -144,33 +148,63 @@ func TestDecideManualWhenExecutableIsOutsideGoBin(t *testing.T) {
 		},
 	}
 
-	decision, err := New("0.1.0").withRunner(runner).Decide(context.Background())
+	decision, err := New("0.1.0").withRunner(runner).withWritable(nil).Decide(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.CanAuto {
-		t.Fatal("expected manual update decision")
+	if !decision.CanAuto {
+		t.Fatalf("expected an automatic update, got manual: %s", decision.Reason)
 	}
-	if decision.Reason == "" {
-		t.Fatal("expected manual reason")
+	if decision.Method != MethodBinary {
+		t.Fatalf("method = %q, want %q", decision.Method, MethodBinary)
 	}
 }
 
-func TestDecideManualWhenGoMissing(t *testing.T) {
+// An install directory owned by root is the normal case for /usr/local/bin.
+// It must be reported as needing manual action — never by escalating on the
+// user's behalf.
+func TestDecideManualWhenInstallDirIsNotWritable(t *testing.T) {
 	runner := &fakeRunner{
-		execPath:  "/tmp/go/bin/claudeops",
-		goPathErr: errors.New("missing"),
+		execPath: "/usr/local/bin/claudeops",
+		goPath:   "/usr/bin/go",
+		goEnv:    Env{GOPATH: "/tmp/go"},
 	}
 
-	decision, err := New("0.1.0").withRunner(runner).Decide(context.Background())
+	decision, err := New("0.1.0").
+		withRunner(runner).
+		withWritable(errors.New("permission denied")).
+		Decide(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if decision.CanAuto {
 		t.Fatal("expected manual update decision")
 	}
-	if decision.Reason != "Go is not available on PATH" {
-		t.Fatalf("unexpected reason: %s", decision.Reason)
+	if decision.Method != MethodBinary {
+		t.Fatalf("method = %q, want %q", decision.Method, MethodBinary)
+	}
+	if !strings.Contains(decision.Reason, "sudo") {
+		t.Fatalf("reason should tell the user what to do, got: %s", decision.Reason)
+	}
+}
+
+// No Go toolchain is exactly the situation of someone who installed a release
+// archive. It is no longer a dead end.
+func TestDecideFallsBackToBinaryWhenGoMissing(t *testing.T) {
+	runner := &fakeRunner{
+		execPath:  "/opt/claudeops/claudeops",
+		goPathErr: errors.New("missing"),
+	}
+
+	decision, err := New("0.1.0").withRunner(runner).withWritable(nil).Decide(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.CanAuto {
+		t.Fatalf("expected an automatic update without Go, got manual: %s", decision.Reason)
+	}
+	if decision.Method != MethodBinary {
+		t.Fatalf("method = %q, want %q", decision.Method, MethodBinary)
 	}
 }
 
@@ -289,22 +323,24 @@ func TestParseGoEnvJSONRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestDecideManualWhenGoEnvFails(t *testing.T) {
+// A broken `go env` says nothing about whether this binary can be replaced,
+// so it falls through to the path that does not need Go.
+func TestDecideFallsBackToBinaryWhenGoEnvFails(t *testing.T) {
 	runner := &fakeRunner{
 		execPath: "/tmp/go/bin/claudeops",
 		goPath:   "/usr/bin/go",
 		goEnvErr: errors.New("go env failed"),
 	}
 
-	decision, err := New("0.1.0").withRunner(runner).Decide(context.Background())
+	decision, err := New("0.1.0").withRunner(runner).withWritable(nil).Decide(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.CanAuto {
-		t.Fatal("expected manual update decision")
+	if !decision.CanAuto {
+		t.Fatalf("expected an automatic update, got manual: %s", decision.Reason)
 	}
-	if decision.Reason != "Could not determine Go install directories" {
-		t.Fatalf("unexpected reason: %s", decision.Reason)
+	if decision.Method != MethodBinary {
+		t.Fatalf("method = %q, want %q", decision.Method, MethodBinary)
 	}
 }
 
@@ -327,22 +363,22 @@ func TestDecideManualWhenExecutableFails(t *testing.T) {
 	}
 }
 
-func TestDecideManualWhenBothGobinAndGopathEmpty(t *testing.T) {
+func TestDecideFallsBackToBinaryWhenBothGobinAndGopathEmpty(t *testing.T) {
 	runner := &fakeRunner{
 		execPath: "/tmp/go/bin/claudeops",
 		goPath:   "/usr/bin/go",
 		goEnv:    Env{},
 	}
 
-	decision, err := New("0.1.0").withRunner(runner).Decide(context.Background())
+	decision, err := New("0.1.0").withRunner(runner).withWritable(nil).Decide(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.CanAuto {
-		t.Fatal("expected manual update decision")
+	if !decision.CanAuto {
+		t.Fatalf("expected an automatic update, got manual: %s", decision.Reason)
 	}
-	if decision.Reason != "Could not determine target install path for `go install`" {
-		t.Fatalf("unexpected reason: %s", decision.Reason)
+	if decision.Method != MethodBinary {
+		t.Fatalf("method = %q, want %q", decision.Method, MethodBinary)
 	}
 }
 
@@ -436,7 +472,10 @@ func TestDecideAutoWhenExecutableIsSymlinkToGoBin(t *testing.T) {
 	}
 }
 
-func TestDecideManualWhenSymlinkResolvesToDifferentPath(t *testing.T) {
+// A binary on PATH that symlinks somewhere outside GOBIN is not something
+// `go install` can update — it would write a second copy into GOBIN and leave
+// this one running. Replacing the file is the only update that reaches the user.
+func TestDecideUsesBinaryReplacementWhenSymlinkResolvesElsewhere(t *testing.T) {
 	runner := &fakeRunner{
 		execPath: "/usr/local/bin/claudeops",
 		goPath:   "/usr/bin/go",
@@ -447,12 +486,15 @@ func TestDecideManualWhenSymlinkResolvesToDifferentPath(t *testing.T) {
 		},
 	}
 
-	decision, err := New("0.1.0").withRunner(runner).Decide(context.Background())
+	decision, err := New("0.1.0").withRunner(runner).withWritable(nil).Decide(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.CanAuto {
-		t.Fatal("expected manual update (symlink resolves to different path)")
+	if decision.Method != MethodBinary {
+		t.Fatalf("method = %q, want %q", decision.Method, MethodBinary)
+	}
+	if !decision.CanAuto {
+		t.Fatalf("expected an automatic binary update, got manual: %s", decision.Reason)
 	}
 }
 
@@ -510,6 +552,116 @@ func TestParseGoEnvJSONHandlesEmptyInput(t *testing.T) {
 func (u Updater) withRunner(r Runner) Updater {
 	u.Runner = r
 	return u
+}
+
+// withWritable pins the writability answer so a decision does not depend on
+// whatever the test machine happens to have at /tmp/go/bin.
+func (u Updater) withWritable(err error) Updater {
+	u.IsWritable = func(string) error { return err }
+	return u
+}
+
+type fakeInstaller struct {
+	version  string
+	execPath string
+	calls    int
+	err      error
+}
+
+func (f *fakeInstaller) Install(_ context.Context, version, execPath string) error {
+	f.calls++
+	f.version = version
+	f.execPath = execPath
+	return f.err
+}
+
+// The whole point of the binary method: it must replace the file the user
+// actually runs, at the version that was published.
+func TestUpdateReplacesTheBinaryInPlace(t *testing.T) {
+	runner := &fakeRunner{
+		execPath:  "/usr/local/bin/claudeops",
+		goPathErr: errors.New("no go"),
+	}
+	installer := &fakeInstaller{}
+
+	u := New("0.1.0").withRunner(runner).withWritable(nil)
+	u.Installer = installer
+	u.Fetcher = staticFetcher{version: "v0.2.0"}
+
+	decision, err := u.Update(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installer.calls != 1 {
+		t.Fatalf("installer called %d times, want 1", installer.calls)
+	}
+	if installer.version != "0.2.0" {
+		t.Fatalf("installed version = %q, want 0.2.0", installer.version)
+	}
+	if installer.execPath != "/usr/local/bin/claudeops" {
+		t.Fatalf("installed over %q, want /usr/local/bin/claudeops", installer.execPath)
+	}
+	if decision.InstalledNow != "claudeops 0.2.0" {
+		t.Fatalf("InstalledNow = %q", decision.InstalledNow)
+	}
+	if len(runner.runCalls) != 0 {
+		t.Fatalf("binary update must not shell out, got: %#v", runner.runCalls)
+	}
+}
+
+// Without a resolved version there is no asset name to request. Guessing would
+// mean downloading something arbitrary over the user's binary.
+func TestUpdateBinaryRefusesWithoutAKnownVersion(t *testing.T) {
+	runner := &fakeRunner{
+		execPath:  "/usr/local/bin/claudeops",
+		goPathErr: errors.New("no go"),
+	}
+	installer := &fakeInstaller{}
+
+	u := New("0.1.0").withRunner(runner).withWritable(nil)
+	u.Installer = installer
+	u.Fetcher = failingFetcher{}
+
+	_, err := u.Update(context.Background())
+	if !errors.Is(err, ErrManual) {
+		t.Fatalf("error = %v, want ErrManual", err)
+	}
+	if installer.calls != 0 {
+		t.Fatalf("installer must not run without a version, called %d times", installer.calls)
+	}
+}
+
+// A failed download leaves the user where they were, with somewhere to go.
+func TestUpdateBinaryReportsInstallFailure(t *testing.T) {
+	runner := &fakeRunner{
+		execPath:  "/usr/local/bin/claudeops",
+		goPathErr: errors.New("no go"),
+	}
+	installer := &fakeInstaller{err: ErrChecksumMismatch}
+
+	u := New("0.1.0").withRunner(runner).withWritable(nil)
+	u.Installer = installer
+	u.Fetcher = staticFetcher{version: "v0.2.0"}
+
+	_, err := u.Update(context.Background())
+	if !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("error = %v, want ErrChecksumMismatch", err)
+	}
+	if !strings.Contains(err.Error(), releasesPage) {
+		t.Fatalf("error should point at the releases page, got: %v", err)
+	}
+}
+
+type staticFetcher struct{ version string }
+
+func (f staticFetcher) Latest(context.Context) (Release, error) {
+	return Release{Version: f.version}, nil
+}
+
+type failingFetcher struct{}
+
+func (failingFetcher) Latest(context.Context) (Release, error) {
+	return Release{}, errors.New("proxy unreachable")
 }
 
 func TestSemverLT(t *testing.T) {
