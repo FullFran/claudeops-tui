@@ -472,7 +472,10 @@ func TestDecideAutoWhenExecutableIsSymlinkToGoBin(t *testing.T) {
 	}
 }
 
-func TestDecideManualWhenSymlinkResolvesToDifferentPath(t *testing.T) {
+// A binary on PATH that symlinks somewhere outside GOBIN is not something
+// `go install` can update — it would write a second copy into GOBIN and leave
+// this one running. Replacing the file is the only update that reaches the user.
+func TestDecideUsesBinaryReplacementWhenSymlinkResolvesElsewhere(t *testing.T) {
 	runner := &fakeRunner{
 		execPath: "/usr/local/bin/claudeops",
 		goPath:   "/usr/bin/go",
@@ -483,12 +486,15 @@ func TestDecideManualWhenSymlinkResolvesToDifferentPath(t *testing.T) {
 		},
 	}
 
-	decision, err := New("0.1.0").withRunner(runner).Decide(context.Background())
+	decision, err := New("0.1.0").withRunner(runner).withWritable(nil).Decide(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.CanAuto {
-		t.Fatal("expected manual update (symlink resolves to different path)")
+	if decision.Method != MethodBinary {
+		t.Fatalf("method = %q, want %q", decision.Method, MethodBinary)
+	}
+	if !decision.CanAuto {
+		t.Fatalf("expected an automatic binary update, got manual: %s", decision.Reason)
 	}
 }
 
