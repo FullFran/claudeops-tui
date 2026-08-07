@@ -151,27 +151,27 @@ func New(version string) Updater {
 	}
 }
 
-// resolveLatest fills in what is published, using the source the chosen method
-// would actually install from.
+// resolveLatest fills in what is published.
 //
-// The two disagree routinely, and each is only authoritative for its own
-// method: the proxy indexes git tags, which exist before their archives are
-// built and for releases that never produced any, while GitHub Releases knows
-// nothing about what `go install` can fetch. Asking the wrong one is how a
-// binary install gets offered a version it can only 404 on.
+// GitHub Releases is the authority for both methods, and the module proxy is
+// only a fallback for when it cannot be reached.
+//
+// For a binary update that is obvious: the archives live there, and the proxy
+// indexes git tags, which exist before their archives are built and forever
+// for releases that never produced any — so the proxy names versions the
+// installer can only 404 on.
+//
+// It is equally true for `go install`, which is less obvious. That path runs
+// with GOPROXY=direct, so it installs from git tags and is not limited to what
+// the proxy has cached. Asking the proxy therefore under-reports what it can
+// already install: minutes after v0.14.1 was published the proxy still listed
+// v0.13.1, and an install sitting in GOBIN was told it was "already up to
+// date" while a newer release existed and was installable.
 //
 // A source that cannot be reached is not an error. It leaves LatestVersion
 // empty, and the caller decides what that means for its method.
 func (u Updater) resolveLatest(ctx context.Context, decision *Decision) {
-	fetcher := u.Fetcher
-	if decision.Method == MethodBinary && u.ReleaseFetcher != nil {
-		fetcher = u.ReleaseFetcher
-	}
-	if fetcher == nil {
-		return
-	}
-
-	rel, err := fetcher.Latest(ctx)
+	rel, err := u.fetchLatest(ctx)
 	if err != nil {
 		return
 	}
@@ -186,6 +186,23 @@ func (u Updater) resolveLatest(ctx context.Context, decision *Decision) {
 		decision.UpToDate = true
 		decision.Downgrade = true
 	}
+}
+
+// fetchLatest prefers the release index and falls back to the module proxy.
+//
+// The fallback matters for a machine that can reach proxy.golang.org but not
+// api.github.com — a corporate mirror, an offline-ish CI box — where "no
+// answer" would otherwise hide an available update entirely.
+func (u Updater) fetchLatest(ctx context.Context) (Release, error) {
+	if u.ReleaseFetcher != nil {
+		if rel, err := u.ReleaseFetcher.Latest(ctx); err == nil {
+			return rel, nil
+		}
+	}
+	if u.Fetcher == nil {
+		return Release{}, errors.New("no version source configured")
+	}
+	return u.Fetcher.Latest(ctx)
 }
 
 func (u Updater) Decide(ctx context.Context) (Decision, error) {
