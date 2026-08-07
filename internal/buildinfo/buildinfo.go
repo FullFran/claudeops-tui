@@ -25,7 +25,7 @@ import (
 
 // defaultVersion is the version this source tree claims to be. Bump it in the
 // release commit; .github/workflows/release.yml asserts it against the tag.
-const defaultVersion = "0.14.0"
+const defaultVersion = "0.14.1"
 
 // unknownValue is reported for build metadata no source could supply.
 const unknownValue = "unknown"

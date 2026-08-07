@@ -561,6 +561,15 @@ func (u Updater) withWritable(err error) Updater {
 	return u
 }
 
+// withFetcher pins BOTH version sources. Decide picks between them by method,
+// so setting only one leaves the other reaching the real network — which is
+// how these tests silently started querying GitHub.
+func (u Updater) withFetcher(f LatestFetcher) Updater {
+	u.Fetcher = f
+	u.ReleaseFetcher = f
+	return u
+}
+
 type fakeInstaller struct {
 	version  string
 	execPath string
@@ -589,7 +598,7 @@ func TestUpdateReplacesTheBinaryInPlace(t *testing.T) {
 
 	u := New("0.1.0").withRunner(runner).withWritable(nil)
 	u.Installer = installer
-	u.Fetcher = staticFetcher{version: "v0.2.0"}
+	u = u.withFetcher(staticFetcher{version: "v0.2.0"})
 
 	decision, err := u.Update(context.Background())
 	if err != nil {
@@ -628,7 +637,7 @@ func TestUpdateBinaryReportsAVersionThatDisagreesWithItsTag(t *testing.T) {
 
 	u := New("0.1.0").withRunner(runner).withWritable(nil)
 	u.Installer = &fakeInstaller{}
-	u.Fetcher = staticFetcher{version: "v0.2.0"}
+	u = u.withFetcher(staticFetcher{version: "v0.2.0"})
 
 	_, err := u.Update(context.Background())
 	if err == nil {
@@ -649,7 +658,7 @@ func TestUpdateBinarySucceedsWhenTheNewBinaryCannotBeRun(t *testing.T) {
 
 	u := New("0.1.0").withRunner(runner).withWritable(nil)
 	u.Installer = &fakeInstaller{}
-	u.Fetcher = staticFetcher{version: "v0.2.0"}
+	u = u.withFetcher(staticFetcher{version: "v0.2.0"})
 
 	decision, err := u.Update(context.Background())
 	if err != nil {
@@ -671,7 +680,7 @@ func TestUpdateBinaryRefusesWithoutAKnownVersion(t *testing.T) {
 
 	u := New("0.1.0").withRunner(runner).withWritable(nil)
 	u.Installer = installer
-	u.Fetcher = failingFetcher{}
+	u = u.withFetcher(failingFetcher{})
 
 	_, err := u.Update(context.Background())
 	if !errors.Is(err, ErrManual) {
@@ -692,7 +701,7 @@ func TestUpdateBinaryReportsInstallFailure(t *testing.T) {
 
 	u := New("0.1.0").withRunner(runner).withWritable(nil)
 	u.Installer = installer
-	u.Fetcher = staticFetcher{version: "v0.2.0"}
+	u = u.withFetcher(staticFetcher{version: "v0.2.0"})
 
 	_, err := u.Update(context.Background())
 	if !errors.Is(err, ErrChecksumMismatch) {
@@ -792,5 +801,61 @@ func TestDecideUpdatesAReleaseBuildInThatSamePlace(t *testing.T) {
 	}
 	if !decision.CanAuto {
 		t.Fatalf("expected an automatic update, got manual: %s", decision.Reason)
+	}
+}
+
+// The proxy and GitHub Releases disagree routinely: a tag exists the moment it
+// is pushed, its archives minutes later or never. Each method must ask the
+// source it actually installs from, or a binary install gets offered a version
+// it can only 404 on.
+func TestDecideAsksTheSourceItInstallsFrom(t *testing.T) {
+	tests := []struct {
+		name       string
+		execPath   string
+		goEnv      Env
+		goPathErr  error
+		wantMethod Method
+		want       string
+	}{
+		{
+			name:       "go install asks the module proxy",
+			execPath:   "/tmp/go/bin/claudeops",
+			goEnv:      Env{GOBIN: "/tmp/go/bin"},
+			wantMethod: MethodGoInstall,
+			want:       "0.20.0",
+		},
+		{
+			name:       "binary replacement asks github releases",
+			execPath:   "/usr/local/bin/claudeops",
+			goEnv:      Env{GOBIN: "/tmp/go/bin"},
+			wantMethod: MethodBinary,
+			want:       "0.19.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{
+				execPath:  tt.execPath,
+				goPath:    "/usr/bin/go",
+				goEnv:     tt.goEnv,
+				goPathErr: tt.goPathErr,
+			}
+
+			u := New("0.1.0").withRunner(runner).withWritable(nil)
+			u.Fetcher = staticFetcher{version: "v0.20.0"}        // proxy: tag exists
+			u.ReleaseFetcher = staticFetcher{version: "v0.19.0"} // github: archives exist
+
+			decision, err := u.Decide(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Method != tt.wantMethod {
+				t.Fatalf("method = %q, want %q", decision.Method, tt.wantMethod)
+			}
+			if decision.LatestVersion != tt.want {
+				t.Fatalf("LatestVersion = %q, want %q", decision.LatestVersion, tt.want)
+			}
+		})
 	}
 }
