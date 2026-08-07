@@ -322,6 +322,113 @@ func TestReplaceExecutablePreservesPermissions(t *testing.T) {
 	}
 }
 
+// Homebrew and friends put a symlink on PATH and keep the real binary in a
+// cellar directory. Renaming over the symlink would replace it with a regular
+// file and orphan the target, quietly dismantling that arrangement. The update
+// must land on the file the symlink points at.
+func TestReplaceExecutableFollowsASymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix symlink semantics")
+	}
+
+	root := t.TempDir()
+	cellar := filepath.Join(root, "cellar")
+	binDir := filepath.Join(root, "bin")
+	for _, d := range []string{cellar, binDir} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	real := filepath.Join(cellar, "claudeops")
+	if err := os.WriteFile(real, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(binDir, "claudeops")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceExecutable(link, []byte("new binary")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The symlink must still be a symlink, still pointing where it did.
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the symlink was replaced by a regular file")
+	}
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != real {
+		t.Fatalf("symlink now points at %q, want %q", target, real)
+	}
+
+	// ...and the file it points at must carry the new binary.
+	got, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new binary" {
+		t.Fatalf("target contents = %q, want %q", got, "new binary")
+	}
+
+	// The new binary must be written into the cellar, not next to the symlink.
+	entries, err := os.ReadDir(binDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("files left beside the symlink: %d entries", len(entries))
+	}
+}
+
+// Writability is a property of the directory the file will actually be written
+// to. For a symlinked install that is the target's directory, not the one the
+// symlink sits in — checking the wrong one reports success and then fails
+// mid-update, after the download.
+func TestWritableFollowsASymlinkToItsTarget(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission semantics")
+	}
+
+	root := t.TempDir()
+	cellar := filepath.Join(root, "cellar")
+	binDir := filepath.Join(root, "bin")
+	for _, d := range []string{cellar, binDir} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	real := filepath.Join(cellar, "claudeops")
+	if err := os.WriteFile(real, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(binDir, "claudeops")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// The symlink's own directory stays writable; the target's does not.
+	if err := os.Chmod(cellar, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cellar, 0o755) })
+
+	if err := Writable(link); err == nil {
+		t.Fatal("expected an error: the symlink target's directory is read-only")
+	}
+}
+
 func TestParseChecksums(t *testing.T) {
 	in := "abc123  claudeops_0.14.0_linux_amd64.tar.gz\ndef456  claudeops_0.14.0_darwin_arm64.tar.gz\n\n"
 	got := parseChecksums(in)

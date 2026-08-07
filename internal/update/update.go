@@ -191,9 +191,12 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 
 	if err := u.writable()(decision.ExecutablePath); err != nil {
 		decision.InstallCommand = releasesPage
+		// Name the directory the update would actually write to. For a symlinked
+		// install that is the target's directory, and pointing at the symlink's
+		// instead would send the user to fix permissions on the wrong one.
 		decision.Reason = fmt.Sprintf(
 			"%s is not writable by this user; re-run with sudo, or reinstall claudeops somewhere you own",
-			filepath.Dir(decision.ExecutablePath))
+			filepath.Dir(installTarget(decision.ExecutablePath)))
 		return decision, nil
 	}
 

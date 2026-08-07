@@ -84,7 +84,7 @@ func AssetName(version, goos, goarch string) string {
 // before anything is downloaded means an unwritable /usr/local/bin fails in a
 // second rather than after a 7MB download.
 func Writable(execPath string) error {
-	dir := filepath.Dir(execPath)
+	dir := filepath.Dir(installTarget(execPath))
 	probe, err := os.CreateTemp(dir, ".claudeops-update-*")
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrNotWritable, dir)
@@ -230,7 +230,25 @@ func extractFromZip(archive []byte, wanted string) ([]byte, error) {
 	return nil, fmt.Errorf("archive contains no %s", wanted)
 }
 
-// replaceExecutable swaps binary in for the file at execPath.
+// installTarget resolves execPath to the file an update must actually write.
+//
+// A package manager typically puts a symlink on PATH and keeps the binary in a
+// directory of its own. Renaming over the symlink would replace it with a
+// regular file and leave the target behind at the old version, so every path
+// that writes or probes has to follow it first.
+//
+// An unresolvable path is returned unchanged: the caller's own error is a
+// better report than one invented here.
+func installTarget(execPath string) string {
+	resolved, err := filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return execPath
+	}
+	return resolved
+}
+
+// replaceExecutable swaps binary in for the file at execPath, following a
+// symlink to whatever it points at.
 //
 // The new binary is written beside the target first, so the rename is within
 // one filesystem and therefore atomic: either the old binary or the new one is
@@ -238,6 +256,7 @@ func extractFromZip(archive []byte, wanted string) ([]byte, error) {
 // because the rename replaces the directory entry while the running process
 // keeps its open inode.
 func replaceExecutable(execPath string, binary []byte) error {
+	execPath = installTarget(execPath)
 	dir := filepath.Dir(execPath)
 
 	tmp, err := os.CreateTemp(dir, ".claudeops-new-*")
