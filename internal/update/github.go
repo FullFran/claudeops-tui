@@ -2,9 +2,7 @@ package update
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -22,112 +20,95 @@ import (
 // checksums.txt, so a binary install was told to update to a release it could
 // only 404 on.
 //
-// `go install` keeps using the proxy: that is the source it installs from, so
-// for that method the proxy is the correct authority.
+// The same applies to `go install`, which runs with GOPROXY=direct and so
+// installs from tags rather than from what the proxy has cached — the proxy
+// under-reports what it can already install.
 
-// DefaultGitHubAPI is the GitHub REST API root.
-const DefaultGitHubAPI = "https://api.github.com"
+// ReleasesLatestURL redirects to the newest published release.
+const ReleasesLatestURL = "https://github.com/" + Repository + "/releases/latest"
 
 // Repository is the owner/name whose releases carry the published archives.
 const Repository = "fullfran/claudeops-tui"
 
-// GitHubFetcher resolves the newest release that actually has archives
-// attached.
-type GitHubFetcher struct {
-	BaseURL string
-	Repo    string
-	HTTP    *http.Client
-}
-
-func (f GitHubFetcher) base() string {
-	if f.BaseURL != "" {
-		return strings.TrimRight(f.BaseURL, "/")
-	}
-	return DefaultGitHubAPI
-}
-
-func (f GitHubFetcher) repo() string {
-	if f.Repo != "" {
-		return f.Repo
-	}
-	return Repository
-}
-
-func (f GitHubFetcher) client() *http.Client {
-	if f.HTTP != nil {
-		return f.HTTP
-	}
-	return &http.Client{Timeout: 10 * time.Second}
-}
-
-// githubRelease is the subset of the releases payload that matters here.
-type githubRelease struct {
-	TagName    string `json:"tag_name"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
-	Assets     []struct {
-		Name string `json:"name"`
-	} `json:"assets"`
-}
-
-// Latest returns the newest published release carrying a checksums.txt.
+// GitHubFetcher resolves the newest published release.
 //
-// checksums.txt is the file the installer verifies against, so a release
-// without one cannot be installed no matter what its tag says. Requiring it
-// here means an incomplete or legacy release is skipped rather than offered
-// and then failed on.
+// It reads the redirect from /releases/latest rather than calling the REST API.
+// The API allows 60 unauthenticated requests per hour per IP address, which a
+// CLI cannot spend and which is shared by everyone behind the same NAT — the
+// first thing this fetcher did in the wild was exhaust it and silently report
+// "already up to date". The redirect is plain HTTP with no such budget.
+//
+// /releases/latest is also exactly the right question: GitHub excludes drafts
+// and prereleases from it, so a tagged release candidate is never offered as
+// an upgrade.
+type GitHubFetcher struct {
+	// URL overrides the redirect endpoint. Empty uses ReleasesLatestURL.
+	URL  string
+	HTTP *http.Client
+}
+
+func (f GitHubFetcher) url() string {
+	if f.URL != "" {
+		return f.URL
+	}
+	return ReleasesLatestURL
+}
+
+// client returns a client that reports the redirect instead of following it.
+// The redirect target is the answer; following it would fetch a web page.
+func (f GitHubFetcher) client() *http.Client {
+	c := &http.Client{Timeout: 10 * time.Second}
+	if f.HTTP != nil {
+		copied := *f.HTTP
+		c = &copied
+	}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return c
+}
+
+// Latest returns the version the releases page redirects to.
 func (f GitHubFetcher) Latest(ctx context.Context) (Release, error) {
-	body, err := f.get(ctx, "/repos/"+f.repo()+"/releases?per_page=20")
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, f.url(), nil)
 	if err != nil {
 		return Release{}, err
 	}
-
-	var releases []githubRelease
-	if err := json.Unmarshal(body, &releases); err != nil {
-		return Release{}, fmt.Errorf("could not read the release list: %w", err)
-	}
-
-	best := ""
-	for _, rel := range releases {
-		if rel.Draft || rel.Prerelease || !hasChecksums(rel) {
-			continue
-		}
-		v := strings.TrimPrefix(rel.TagName, "v")
-		if _, ok := parseSemver(v); !ok {
-			continue
-		}
-		if best == "" || semverLT(best, v) {
-			best = v
-		}
-	}
-	if best == "" {
-		return Release{}, fmt.Errorf("no published release carries downloadable archives")
-	}
-	return Release{Version: best}, nil
-}
-
-func hasChecksums(rel githubRelease) bool {
-	for _, a := range rel.Assets {
-		if a.Name == "checksums.txt" {
-			return true
-		}
-	}
-	return false
-}
-
-func (f GitHubFetcher) get(ctx context.Context, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.base()+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := f.client().Do(req)
 	if err != nil {
-		return nil, err
+		return Release{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github returned HTTP %d for %s", resp.StatusCode, path)
+
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return Release{}, fmt.Errorf("release index returned HTTP %d, expected a redirect", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	location := resp.Header.Get("Location")
+	version := tagFromReleaseURL(location)
+	if version == "" {
+		return Release{}, fmt.Errorf("could not read a version from %q", location)
+	}
+	if _, ok := parseSemver(version); !ok {
+		return Release{}, fmt.Errorf("release index reported %q, which is not a version", version)
+	}
+	return Release{Version: version}, nil
+}
+
+// tagFromReleaseURL pulls the tag out of ".../releases/tag/vX.Y.Z".
+//
+// Only that shape is accepted. A repository with no releases at all redirects
+// to the releases index, whose last path segment would otherwise be read as a
+// version.
+func tagFromReleaseURL(u string) string {
+	marker := "/releases/tag/"
+	i := strings.Index(u, marker)
+	if i < 0 {
+		return ""
+	}
+	tag := u[i+len(marker):]
+	if i := strings.IndexAny(tag, "?#/"); i >= 0 {
+		tag = tag[:i]
+	}
+	return strings.TrimPrefix(tag, "v")
 }

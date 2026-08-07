@@ -805,46 +805,30 @@ func TestDecideUpdatesAReleaseBuildInThatSamePlace(t *testing.T) {
 }
 
 // The proxy and GitHub Releases disagree routinely: a tag exists the moment it
-// is pushed, its archives minutes later or never. Each method must ask the
-// source it actually installs from, or a binary install gets offered a version
-// it can only 404 on.
-func TestDecideAsksTheSourceItInstallsFrom(t *testing.T) {
+// is pushed, its archives minutes later or never. The release index is the
+// authority for both methods — `go install` runs with GOPROXY=direct, so it
+// installs from tags too and is not limited to what the proxy has cached.
+func TestDecidePrefersTheReleaseIndexForBothMethods(t *testing.T) {
 	tests := []struct {
 		name       string
 		execPath   string
-		goEnv      Env
-		goPathErr  error
 		wantMethod Method
-		want       string
 	}{
-		{
-			name:       "go install asks the module proxy",
-			execPath:   "/tmp/go/bin/claudeops",
-			goEnv:      Env{GOBIN: "/tmp/go/bin"},
-			wantMethod: MethodGoInstall,
-			want:       "0.20.0",
-		},
-		{
-			name:       "binary replacement asks github releases",
-			execPath:   "/usr/local/bin/claudeops",
-			goEnv:      Env{GOBIN: "/tmp/go/bin"},
-			wantMethod: MethodBinary,
-			want:       "0.19.0",
-		},
+		{name: "go install", execPath: "/tmp/go/bin/claudeops", wantMethod: MethodGoInstall},
+		{name: "binary replacement", execPath: "/usr/local/bin/claudeops", wantMethod: MethodBinary},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &fakeRunner{
-				execPath:  tt.execPath,
-				goPath:    "/usr/bin/go",
-				goEnv:     tt.goEnv,
-				goPathErr: tt.goPathErr,
+				execPath: tt.execPath,
+				goPath:   "/usr/bin/go",
+				goEnv:    Env{GOBIN: "/tmp/go/bin"},
 			}
 
 			u := New("0.1.0").withRunner(runner).withWritable(nil)
-			u.Fetcher = staticFetcher{version: "v0.20.0"}        // proxy: tag exists
-			u.ReleaseFetcher = staticFetcher{version: "v0.19.0"} // github: archives exist
+			u.Fetcher = staticFetcher{version: "v0.13.1"}        // proxy lagging
+			u.ReleaseFetcher = staticFetcher{version: "v0.14.1"} // actually published
 
 			decision, err := u.Decide(context.Background())
 			if err != nil {
@@ -853,9 +837,34 @@ func TestDecideAsksTheSourceItInstallsFrom(t *testing.T) {
 			if decision.Method != tt.wantMethod {
 				t.Fatalf("method = %q, want %q", decision.Method, tt.wantMethod)
 			}
-			if decision.LatestVersion != tt.want {
-				t.Fatalf("LatestVersion = %q, want %q", decision.LatestVersion, tt.want)
+			if decision.LatestVersion != "0.14.1" {
+				t.Fatalf("LatestVersion = %q, want 0.14.1", decision.LatestVersion)
+			}
+			if decision.UpToDate {
+				t.Fatal("a newer release exists; this must not report up to date")
 			}
 		})
+	}
+}
+
+// A machine that can reach the proxy but not GitHub must still learn that an
+// update exists, rather than being told nothing at all.
+func TestDecideFallsBackToTheProxyWhenTheReleaseIndexIsUnreachable(t *testing.T) {
+	runner := &fakeRunner{
+		execPath: "/tmp/go/bin/claudeops",
+		goPath:   "/usr/bin/go",
+		goEnv:    Env{GOBIN: "/tmp/go/bin"},
+	}
+
+	u := New("0.1.0").withRunner(runner).withWritable(nil)
+	u.Fetcher = staticFetcher{version: "v0.13.1"}
+	u.ReleaseFetcher = failingFetcher{}
+
+	decision, err := u.Decide(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.LatestVersion != "0.13.1" {
+		t.Fatalf("LatestVersion = %q, want the proxy's answer 0.13.1", decision.LatestVersion)
 	}
 }
