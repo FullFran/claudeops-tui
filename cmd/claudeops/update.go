@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fullfran/claudeops-tui/internal/buildinfo"
 	selfupdate "github.com/fullfran/claudeops-tui/internal/update"
 )
 
@@ -23,6 +24,7 @@ func cmdUpdate(args []string) error {
 	fmt.Printf("claudeops current version: %s\n", version)
 
 	updater := selfupdate.New(version)
+	updater.SourceBuild = buildinfo.FromSource()
 
 	if *check {
 		decision, err := updater.Decide(ctx)
@@ -33,6 +35,12 @@ func cmdUpdate(args []string) error {
 			fmt.Printf("installed at: %s\n", decision.ExecutablePath)
 		}
 		switch {
+		case decision.LatestVersion == "" && decision.Method == selfupdate.MethodBinary:
+			// A binary update has to know which archive to fetch. Without a
+			// version there is nothing to try, so "try anyway" would send the
+			// user to a guaranteed dead end.
+			fmt.Println("could not reach the release index, so there is nothing to download")
+			fmt.Printf("check your connection, or download manually: %s\n", selfupdate.ReleasesPage)
 		case decision.LatestVersion == "":
 			fmt.Println("could not reach the module proxy; run `claudeops update` to try anyway")
 		case decision.Downgrade:
@@ -65,7 +73,10 @@ func cmdUpdate(args []string) error {
 			return nil
 		}
 		if decision.Method == selfupdate.MethodBinary {
-			fmt.Printf("replaced %s with the published release\n", decision.ExecutablePath)
+			// InstalledPath, not ExecutablePath: a symlinked install has the
+			// release written to the link's target, and naming the link would
+			// point at a file that was never touched.
+			fmt.Printf("replaced %s with the published release\n", decision.InstalledPath)
 		} else {
 			fmt.Printf("update command: %s\n", decision.InstallCommand)
 		}
@@ -81,7 +92,14 @@ func cmdUpdate(args []string) error {
 	if errors.Is(err, selfupdate.ErrStaleRelease) {
 		fmt.Println("nothing installed — your binary was left alone")
 		fmt.Println("this happens on a build made between releases; wait for the next tag, or:")
-		fmt.Printf("  GOPROXY=direct %s\n", decision.InstallCommand)
+		// GOPROXY is a Go toolchain setting. Prefixing it onto a binary-update
+		// command — or onto the releases URL, which is what InstallCommand holds
+		// when the install directory is not writable — produces nonsense.
+		if decision.Method == selfupdate.MethodBinary {
+			fmt.Printf("  download the release you want: %s\n", selfupdate.ReleasesPage)
+		} else {
+			fmt.Printf("  GOPROXY=direct %s\n", decision.InstallCommand)
+		}
 		return err
 	}
 
@@ -91,7 +109,13 @@ func cmdUpdate(args []string) error {
 			fmt.Printf("reason: %s\n", decision.Reason)
 		}
 		fmt.Println("manual update:")
-		fmt.Printf("  %s\n", decision.InstallCommand)
+		if decision.Method == selfupdate.MethodBinary && decision.InstallCommand == "claudeops update" {
+			// That is the command that just failed. Sending the user back to it
+			// is not instructions, it is a loop.
+			fmt.Printf("  %s\n", selfupdate.ReleasesPage)
+		} else {
+			fmt.Printf("  %s\n", decision.InstallCommand)
+		}
 		// The GOPROXY and PATH advice below is about `go install`, and telling
 		// it to someone updating a downloaded binary is how they end up with a
 		// second copy in GOBIN while the one they run stays where it was.

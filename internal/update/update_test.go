@@ -581,6 +581,9 @@ func TestUpdateReplacesTheBinaryInPlace(t *testing.T) {
 	runner := &fakeRunner{
 		execPath:  "/usr/local/bin/claudeops",
 		goPathErr: errors.New("no go"),
+		runResults: map[string]fakeRunResult{
+			runKey("/usr/local/bin/claudeops", "version"): {out: []byte("claudeops 0.2.0\ncommit: abc1234\n")},
+		},
 	}
 	installer := &fakeInstaller{}
 
@@ -601,11 +604,59 @@ func TestUpdateReplacesTheBinaryInPlace(t *testing.T) {
 	if installer.execPath != "/usr/local/bin/claudeops" {
 		t.Fatalf("installed over %q, want /usr/local/bin/claudeops", installer.execPath)
 	}
+	// The version must be read back from the binary that was written, not
+	// assumed from the tag it was published under.
 	if decision.InstalledNow != "claudeops 0.2.0" {
 		t.Fatalf("InstalledNow = %q", decision.InstalledNow)
 	}
-	if len(runner.runCalls) != 0 {
-		t.Fatalf("binary update must not shell out, got: %#v", runner.runCalls)
+	if decision.InstalledPath != "/usr/local/bin/claudeops" {
+		t.Fatalf("InstalledPath = %q", decision.InstalledPath)
+	}
+}
+
+// A release whose archive carries a different version than its tag is a broken
+// release. Reporting the tag would hide that behind a success message, and the
+// next update would download the same archive again.
+func TestUpdateBinaryReportsAVersionThatDisagreesWithItsTag(t *testing.T) {
+	runner := &fakeRunner{
+		execPath:  "/usr/local/bin/claudeops",
+		goPathErr: errors.New("no go"),
+		runResults: map[string]fakeRunResult{
+			runKey("/usr/local/bin/claudeops", "version"): {out: []byte("claudeops 0.1.9\n")},
+		},
+	}
+
+	u := New("0.1.0").withRunner(runner).withWritable(nil)
+	u.Installer = &fakeInstaller{}
+	u.Fetcher = staticFetcher{version: "v0.2.0"}
+
+	_, err := u.Update(context.Background())
+	if err == nil {
+		t.Fatal("expected an error when the installed version disagrees with the tag")
+	}
+	if !strings.Contains(err.Error(), "0.1.9") || !strings.Contains(err.Error(), "0.2.0") {
+		t.Fatalf("error should name both versions, got: %v", err)
+	}
+}
+
+// A binary that cannot be executed to confirm its version is not a failure —
+// the swap already succeeded. The CLI reports that it could not verify.
+func TestUpdateBinarySucceedsWhenTheNewBinaryCannotBeRun(t *testing.T) {
+	runner := &fakeRunner{
+		execPath:  "/usr/local/bin/claudeops",
+		goPathErr: errors.New("no go"),
+	}
+
+	u := New("0.1.0").withRunner(runner).withWritable(nil)
+	u.Installer = &fakeInstaller{}
+	u.Fetcher = staticFetcher{version: "v0.2.0"}
+
+	decision, err := u.Update(context.Background())
+	if err != nil {
+		t.Fatalf("an unverifiable version must not fail the update: %v", err)
+	}
+	if decision.InstalledNow != "" {
+		t.Fatalf("InstalledNow = %q, want empty so the CLI says it could not verify", decision.InstalledNow)
 	}
 }
 
@@ -677,6 +728,13 @@ func TestSemverLT(t *testing.T) {
 		{"higher patch", "0.7.1", "0.7.0", false},
 		{"v prefix tolerated", "v0.7.0", "v0.7.1", true},
 		{"prerelease keeps base precedence", "0.7.0-rc1", "0.7.1", true},
+		// A release candidate precedes the release it is a candidate for.
+		// Treating them as equal strands every RC tester: the GA release
+		// compares as "not newer", so the update is refused as a downgrade.
+		{"rc precedes its own release", "0.14.0-rc.1", "0.14.0", true},
+		{"release does not precede its rc", "0.14.0", "0.14.0-rc.1", false},
+		{"rc does not precede an earlier release", "0.14.0-rc.1", "0.13.9", false},
+		{"two prereleases compare as equal bases", "0.14.0-rc.1", "0.14.0-rc.2", false},
 		// A version string that cannot be parsed must never be reported as
 		// older: Sscanf leaves 0.0.0 behind, which would make any real
 		// version look newer and fabricate a stale-proxy failure.
@@ -692,5 +750,47 @@ func TestSemverLT(t *testing.T) {
 				t.Errorf("semverLT(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
+	}
+}
+
+// A binary built from source is the developer's own work in progress. It looks
+// outdated to Decide (buildinfo reports defaultVersion for it), so without a
+// guard `claudeops update` would download a release archive and rename it over
+// the very build being tested.
+func TestDecideRefusesToOverwriteASourceBuild(t *testing.T) {
+	runner := &fakeRunner{
+		execPath: "/home/user/src/claudeops-tui/claudeops",
+		goPath:   "/usr/bin/go",
+		goEnv:    Env{GOBIN: "/home/user/go/bin"},
+	}
+
+	u := New("0.1.0").withRunner(runner).withWritable(nil)
+	u.SourceBuild = true
+	decision, err := u.Decide(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.CanAuto {
+		t.Fatal("a source build must not be replaced automatically")
+	}
+	if !strings.Contains(decision.Reason, "built from source") {
+		t.Fatalf("reason should say why, got: %q", decision.Reason)
+	}
+}
+
+// The same install, not built from source, still updates.
+func TestDecideUpdatesAReleaseBuildInThatSamePlace(t *testing.T) {
+	runner := &fakeRunner{
+		execPath: "/home/user/src/claudeops-tui/claudeops",
+		goPath:   "/usr/bin/go",
+		goEnv:    Env{GOBIN: "/home/user/go/bin"},
+	}
+
+	decision, err := New("0.1.0").withRunner(runner).withWritable(nil).Decide(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.CanAuto {
+		t.Fatalf("expected an automatic update, got manual: %s", decision.Reason)
 	}
 }

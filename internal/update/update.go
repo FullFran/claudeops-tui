@@ -85,6 +85,12 @@ type Decision struct {
 	ExpectedPath   string
 	InstalledNow   string
 
+	// InstalledPath is the file a binary update actually wrote. It differs from
+	// ExecutablePath when the executable is a symlink: the update follows it and
+	// rewrites the target, so reporting ExecutablePath would name a file that
+	// was not modified.
+	InstalledPath string
+
 	// Method is how an automatic update would be performed. It is meaningful
 	// even when CanAuto is false: it says which path was chosen and therefore
 	// what Reason is talking about.
@@ -115,6 +121,13 @@ type Updater struct {
 	// IsWritable reports whether the running binary can be replaced in place.
 	// Nil probes the real filesystem.
 	IsWritable func(execPath string) error
+
+	// SourceBuild marks a binary built from a working tree rather than
+	// installed from a release. Such a binary is someone's work in progress,
+	// and it always looks outdated — its version falls back to whatever the
+	// source tree claims — so replacing it would quietly destroy the build
+	// under test. Callers set this from buildinfo.FromSource().
+	SourceBuild bool
 }
 
 // BinaryUpdater installs a published release over the running executable.
@@ -189,11 +202,26 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 	decision.Method = MethodBinary
 	decision.InstallCommand = "claudeops update"
 
-	if err := u.writable()(decision.ExecutablePath); err != nil {
+	// `go install` refused to touch anything outside GOBIN, which incidentally
+	// protected a developer's own build. Binary replacement has no such limit,
+	// so the protection has to be stated rather than inherited.
+	if u.SourceBuild {
 		decision.InstallCommand = releasesPage
 		decision.Reason = fmt.Sprintf(
+			"%s was built from source, not installed from a release; "+
+				"replacing it would overwrite your own build",
+			decision.ExecutablePath)
+		return decision, nil
+	}
+
+	if err := u.writable()(decision.ExecutablePath); err != nil {
+		decision.InstallCommand = releasesPage
+		// Name the directory the update would actually write to. For a symlinked
+		// install that is the target's directory, and pointing at the symlink's
+		// instead would send the user to fix permissions on the wrong one.
+		decision.Reason = fmt.Sprintf(
 			"%s is not writable by this user; re-run with sudo, or reinstall claudeops somewhere you own",
-			filepath.Dir(decision.ExecutablePath))
+			filepath.Dir(installTarget(decision.ExecutablePath)))
 		return decision, nil
 	}
 
@@ -202,7 +230,10 @@ func (u Updater) Decide(ctx context.Context) (Decision, error) {
 }
 
 // releasesPage is where a human goes when no automatic path is available.
-const releasesPage = "https://github.com/fullfran/claudeops-tui/releases/latest"
+const releasesPage = ReleasesPage
+
+// ReleasesPage is where a human goes when no automatic path is available.
+const ReleasesPage = "https://github.com/fullfran/claudeops-tui/releases/latest"
 
 // goInstallTarget reports the path `go install` would write, when Go is
 // available at all. A missing toolchain is not a failure any more — it just
@@ -304,11 +335,32 @@ func (u Updater) updateBinary(ctx context.Context, decision Decision) (Decision,
 				"download manually: %s", ErrManual, releasesPage)
 	}
 
+	// Report the file that is actually rewritten. For a symlinked install the
+	// update follows the link, so naming the link would name an untouched file.
+	decision.InstalledPath = installTarget(decision.ExecutablePath)
+
 	if err := u.installer().Install(ctx, decision.LatestVersion, decision.ExecutablePath); err != nil {
-		return decision, fmt.Errorf("automatic update failed: %w\ndownload manually: %s", err, releasesPage)
+		return decision, fmt.Errorf(
+			"automatic update failed: %w\n"+
+				"if the tag was pushed only moments ago its archives may still be building; "+
+				"otherwise download manually: %s",
+			err, releasesPage)
 	}
 
-	decision.InstalledNow = "claudeops " + decision.LatestVersion
+	// Ask the new binary what it is rather than assuming it matches the tag it
+	// was published under. A mismatch means the release is not what it claims,
+	// and reporting the tag would hide that behind a success message — and the
+	// next update would download the very same archive again.
+	if out, err := u.Runner.Run(ctx, decision.InstalledPath, "version"); err == nil {
+		decision.InstalledNow = firstLine(string(out))
+	}
+	if installed := extractSemver(decision.InstalledNow); installed != "" && installed != decision.LatestVersion {
+		return decision, fmt.Errorf(
+			"installed %s but release v%s was requested\n"+
+				"the published archive does not match its tag; report this and reinstall from %s",
+			installed, decision.LatestVersion, releasesPage)
+	}
+
 	return decision, nil
 }
 
@@ -345,7 +397,18 @@ func semverLT(a, b string) bool {
 			return av[i] < bv[i]
 		}
 	}
-	return false // equal is not less-than
+	// Same base version. A release candidate precedes the release it is a
+	// candidate for, so 0.14.0-rc.1 < 0.14.0 — without this every RC tester is
+	// stranded, because the GA release compares as "not newer" and the update
+	// is then refused as a downgrade.
+	//
+	// Two prereleases of the same base are left equal. Ordering rc.2 above rc.1
+	// needs the full semver identifier rules, and nothing here depends on it.
+	return hasPrerelease(a) && !hasPrerelease(b)
+}
+
+func hasPrerelease(v string) bool {
+	return strings.Contains(strings.TrimPrefix(v, "v"), "-")
 }
 
 // parseSemver splits "vX.Y.Z" (and "X.Y.Z-suffix") into its numeric parts.

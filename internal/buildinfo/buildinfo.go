@@ -25,7 +25,7 @@ import (
 
 // defaultVersion is the version this source tree claims to be. Bump it in the
 // release commit; .github/workflows/release.yml asserts it against the tag.
-const defaultVersion = "0.13.1"
+const defaultVersion = "0.14.0"
 
 // unknownValue is reported for build metadata no source could supply.
 const unknownValue = "unknown"
@@ -49,6 +49,22 @@ func Commit() string { return resolveCommit(commit, vcsSetting("vcs.revision")) 
 
 // Date reports the build timestamp, or "unknown".
 func Date() string { return resolveDate(date, vcsSetting("vcs.time")) }
+
+// FromSource reports whether this binary was built from a source tree rather
+// than installed from a published release.
+//
+// Version() cannot answer this: it deliberately reports defaultVersion for a
+// source build, which is indistinguishable from a real release of that number.
+// The self-updater needs the difference, because replacing a developer's own
+// build with a published archive destroys the thing they were testing.
+func FromSource() bool { return isSourceBuild(version, moduleVersion()) }
+
+func isSourceBuild(ldflags, module string) bool {
+	if normalize(ldflags) != "" {
+		return false // only a release build carries ldflags
+	}
+	return !isReleaseVersion(normalize(module))
+}
 
 func resolveVersion(ldflags, module string) string {
 	if v := normalize(ldflags); v != "" {

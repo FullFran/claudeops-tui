@@ -80,14 +80,18 @@ changelog:
   sort: asc
   # Release notes are for people deciding whether to upgrade. Housekeeping
   # commits are not that.
+  #
+  # The optional "(scope)" is not optional in practice: CLAUDE.md mandates
+  # `type(scope): subject`, and dependabot.yml sets include:scope, so a bare
+  # "^chore:" would miss every commit this filter exists to hide.
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^ci:"
-      - "^style:"
-      - "^refactor:"
+      - '^docs(\(.+\))?:'
+      - '^test(\(.+\))?:'
+      - '^chore(\(.+\))?:'
+      - '^ci(\(.+\))?:'
+      - '^style(\(.+\))?:'
+      - '^refactor(\(.+\))?:'
       - "Merge pull request"
       - "Merge branch"
 
