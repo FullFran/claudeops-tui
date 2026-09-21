@@ -7,11 +7,11 @@ Shows **real** subscription % from Anthropic's `/api/oauth/usage` endpoint — n
 ## What it does
 
 - Parses `~/.claude/projects/*.jsonl` incrementally (fsnotify + persisted byte offsets)
-- Also ingests **Codex** rollouts (`~/.codex/sessions`) and **opencode**'s SQLite database when they are present, auto-detected on first run
+- Also ingests **Codex** rollouts (`~/.codex/sessions`), **opencode**'s SQLite database, and **Google Antigravity CLI** (`agy`) conversations when they are present, auto-detected on first run
 - Stores events in local SQLite (`modernc.org/sqlite`, no CGO)
 - Computes per-event cost in € using a **four-class** token breakdown (input, output, cache_read, cache_create) — collapsing them ruins the math
 - Calls Anthropic's undocumented `GET /api/oauth/usage` for the real session/weekly/per-model usage that Claude Code's own `/usage` command uses, with OAuth token refresh
-- Tracks live quota for other services too (Codex, Copilot, Gemini, plus your own HTTP providers) — see [`docs/providers.md`](./docs/providers.md)
+- Tracks live quota for other services too (Codex, Copilot, Gemini, Antigravity, plus your own HTTP providers) — see [`docs/providers.md`](./docs/providers.md)
 - Tracks tasks via `claudeops task start "name"` and attributes every event ingested while the task is active to it (time-window based, across all sessions — see [`docs/limitations.md`](./docs/limitations.md))
 - **Session drill-down** — navigate into any session to see per-model costs, hourly activity, token breakdown with cache hit ratio, and duration
 - **Daily drill-down** — browse daily aggregates with hourly charts and per-model breakdown
@@ -28,6 +28,7 @@ graph LR
     A["~/.claude/projects/*.jsonl"] -->|fsnotify + offsets| B[Collector]
     A2["~/.codex/sessions/**"] -->|fsnotify + offsets| B
     A3["opencode.db"] -->|5s poll + watermark| B
+    A4["agy conversations/*.db"] -->|5s poll + per-file watermark| B
     B -->|parse + cost calc| C[(SQLite WAL)]
     D["Anthropic /api/oauth/usage"] -->|OAuth + 5min cache| E[Usage Client]
     C --> F[TUI Dashboard]
@@ -166,6 +167,10 @@ claudeops otel-config apply      # write Claude Code OTel env vars to settings.j
 claudeops statusline             # one-line usage summary for a terminal status bar
 claudeops otel-config status     # show the OTel telemetry configuration
 claudeops otel-config remove     # remove the OTel telemetry configuration
+claudeops agy statusline         # print agy's status line (wired as its own statusLine command)
+claudeops agy setup [--force]    # wire claudeops as agy's status line
+claudeops agy remove             # remove claudeops as agy's status line
+claudeops agy status             # show whether agy is wired up, and the last quota reading
 claudeops version
 claudeops help
 ```
@@ -392,10 +397,13 @@ Three ways to read the same data, all backed by one shared cache:
 | `~/.claudeops/providers.toml` | optional user-defined quota providers (see [`docs/providers.md`](./docs/providers.md)) |
 | `~/.claudeops/current-task.json` | sidecar for the active task |
 | `~/.claudeops/usage-cache.json` | statusline snapshot cache, atomic + 0600 |
+| `~/.claudeops/antigravity-quota.json` | Antigravity (agy) quota snapshot, written by `claudeops agy statusline`, atomic + 0600 |
 | `~/.claudeops/live/` | hook-written live session sidecars (Classroom tab) |
 | `~/.claude/projects/*.jsonl` | source data — read only |
 | `~/.codex/sessions/**/*.jsonl` | Codex source data — read only (override the parent dir with `CODEX_HOME`) |
 | `$XDG_DATA_HOME/opencode/opencode.db` | opencode source data — read only (default `~/.local/share`; the conventional path is still probed as a fallback) |
+| `~/.gemini/antigravity-cli/conversations/*.db` | agy source data — one SQLite per conversation, read only |
+| `~/.gemini/antigravity-cli/settings.json` | agy's own settings — `claudeops agy setup/remove` edits only its `statusLine` key |
 | `~/.claude/.credentials.json` | OAuth tokens — read always, written only during token refresh, atomic + 0600; locking uses the sidecar `.credentials.json.lock` |
 | `~/.claude/settings.json` | Claude Code settings — claudeops manages only its hook entries and OTel env vars |
 
@@ -463,7 +471,7 @@ include_tool_details = false  # log Bash commands and file paths
 # Optional: pin the ingestion sources instead of auto-detecting them.
 # An explicit [[sources]] list always wins.
 [[sources]]
-name = "claude"               # "claude" | "codex" | "opencode"
+name = "claude"               # "claude" | "codex" | "opencode" | "agy"
 enabled = true
 root = ""                     # empty uses the per-source default path
 format = "jsonl"              # informational
@@ -516,6 +524,7 @@ drill-downs, computed insights, live Classroom, MCP server, and OTLP export.
 - [`docs/architecture.md`](./docs/architecture.md) — package map, data flow, decisions
 - [`docs/upgrading.md`](./docs/upgrading.md) — behavior changes that need action from you
 - [`docs/providers.md`](./docs/providers.md) — built-in and user-defined quota providers
+- [`docs/agy-format.md`](./docs/agy-format.md) — the Google Antigravity CLI conversation database format
 - [`docs/statusline.md`](./docs/statusline.md) — quota in a tmux/Zellij/shell status bar
 - [`plugins/opencode/`](./plugins/opencode) — the same, beside the opencode prompt
 - [`docs/jsonl-format.md`](./docs/jsonl-format.md) — observed Claude Code and Codex event shapes

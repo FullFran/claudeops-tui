@@ -45,6 +45,27 @@ The opencode source reads that tool's SQLite database directly. A schema change
 there breaks ingestion for that source only; the poller surfaces the failure and
 keeps its watermark so nothing is lost once the parser is fixed.
 
+### agy's format is reverse-engineered
+
+There is no public schema for agy's per-conversation SQLite databases or the
+protobuf blobs inside them. The field map in `internal/agy/decoder.go` was
+verified against a real agy 1.2.7 install (see
+[`docs/agy-format.md`](./agy-format.md)); community documentation (tokscale#1184)
+describes an older, incompatible layout and is not used. An agy update can
+change the format without notice, same as any other undocumented dependency
+here. Other things worth knowing:
+
+- A `gen_metadata` row that agy rewrites after claudeops has already read it
+  (e.g. a partial usage completed later) is not re-read. No evidence this
+  happens has been observed across 114 real rows checked during development.
+- The quota shown for Antigravity only refreshes while agy is running and its
+  agent state changes — there is no independent poll — and a bucket whose
+  reset time has already passed is dropped rather than shown stale.
+- Antigravity IDE data under `~/.gemini/antigravity/` (as opposed to the CLI's
+  `~/.gemini/antigravity-cli/`) is not read; its format is unverified.
+- Cost shown for agy calls is the equivalent API value at LiteLLM rates —
+  Antigravity itself is subscription/quota based, not billed per call.
+
 ### Pricing table goes stale
 
 Prices live in `~/.claudeops/pricing.toml`, seeded by us. When Anthropic changes

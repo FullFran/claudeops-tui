@@ -90,6 +90,7 @@ claude   = "claude"
 opencode = "codex"       # point at "claude" if your opencode uses Anthropic models
 codex    = "codex"
 crush    = "codex"
+agy      = "antigravity"
 ```
 
 The mapping is a plain command-to-provider table, so adding an agent is a config
@@ -234,6 +235,43 @@ PS1='$(claudeops statusline) \w \$ '
 ```
 
 The on-disk cache makes this cheap enough to run on every prompt.
+
+## Using claudeops as agy's status line
+
+Google Antigravity CLI (`agy`) has its own status line, configured with a
+`statusLine` command in its `settings.json`. Unlike the other agents, agy is
+not detected by `--provider auto` from a running pane — it pushes its quota
+data to whatever command it runs, so claudeops has to be that command:
+
+```console
+$ claudeops agy setup
+agy status line set to: claudeops agy statusline
+settings: ~/.gemini/antigravity-cli/settings.json
+```
+
+`setup` preserves every other key in agy's `settings.json`, and refuses to
+replace a status line it did not configure — pass `--force` if you mean to.
+`claudeops agy statusline` is the command agy then runs on every agent-state
+change: it reads the quota agy sends on stdin, persists a snapshot to
+`~/.claudeops/antigravity-quota.json` (mode 0600, nothing beyond the quota
+buckets and plan tier), and prints the same status-line format as everything
+else here. That snapshot is what `provider.Antigravity` — and the `agy`
+mapping in `[statusline.agents]` above — reads back.
+
+```console
+$ claudeops agy status
+settings:    ~/.gemini/antigravity-cli/settings.json
+status line: wired to claudeops
+quota:       observed 12s ago
+  5h                59.00% used  resets in 4h1m
+  weekly             6.00% used  resets in 6d3h
+
+$ claudeops agy remove
+removed the claudeops status line from ~/.gemini/antigravity-cli/settings.json
+```
+
+`remove` only touches the status line when it is the one claudeops itself set;
+someone else's is left untouched, same as `setup` without `--force`.
 
 ## Flags
 

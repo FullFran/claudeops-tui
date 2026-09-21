@@ -13,6 +13,7 @@ up under **Subscription usage** on the Dashboard; if not, it is skipped silently
 | **Codex** (ChatGPT) | `chatgpt.com/backend-api/wham/usage` | `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`), **or** opencode's `openai` OAuth session |
 | **Copilot** (GitHub) | `api.github.com/copilot_internal/user` | `~/.config/github-copilot/apps.json` |
 | **Gemini** (Google) | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` | `~/.gemini/oauth_creds.json`, **or** opencode's `google` OAuth session |
+| **Antigravity** (Google Antigravity CLI, `agy`) | none — fed by agy's own status line | `~/.claudeops/antigravity-quota.json`, written by `claudeops agy statusline` |
 
 Codex accepts either source and tries them in order. A token being *present* is
 not the same as it being *valid*, so a rejected one falls through to the next
@@ -49,6 +50,25 @@ rather than its native CLI, ClaudeOps reads that session from
 no second login required. Codex reuses the `openai` OAuth entry (with its
 `accountId` sent as `chatgpt-account-id`), and Gemini reuses the `google` entry.
 The native CLI credentials, when present, always take precedence.
+
+### Antigravity
+
+Google Antigravity CLI (`agy`) exposes its quota only through its own
+status-line interface — there is no endpoint to poll and no credential to
+check. `claudeops agy setup` wires claudeops in as that status line, so every
+time agy's agent state changes it hands claudeops a fresh quota reading, which
+gets persisted to `~/.claudeops/antigravity-quota.json` and served from there.
+
+```bash
+claudeops agy setup     # wire claudeops as agy's status line
+claudeops agy status    # show whether it's wired up, and the last reading
+claudeops agy remove    # unwire it
+```
+
+Until agy has run at least once with claudeops as its status line, the
+provider reports `absent` — there is nothing to show yet, not a login you are
+missing. A bucket whose reset time has already passed is dropped: the reading
+on disk would no longer be true.
 
 ## Custom providers — `~/.claudeops/providers.toml`
 
