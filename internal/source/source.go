@@ -1,7 +1,8 @@
 // Package source defines the port types for multi-source ingestion.
-// Adapters for Claude (JSONL tail), Codex (JSONL tail), and opencode (DB poll)
-// all implement these interfaces; the store-backed Sink handles pricing and
-// persistence behind the Emit abstraction.
+// Adapters for Claude (JSONL tail), Codex (JSONL tail), opencode (DB poll), and
+// agy (per-conversation SQLite poll) all implement these interfaces; the
+// store-backed Sink handles pricing and persistence behind the Emit
+// abstraction.
 package source
 
 import (
@@ -16,6 +17,7 @@ const (
 	Claude   Name = "claude"
 	Codex    Name = "codex"
 	Opencode Name = "opencode"
+	Agy      Name = "agy"
 )
 
 // String returns the string form of the source name.
