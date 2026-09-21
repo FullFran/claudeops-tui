@@ -141,7 +141,9 @@ func DecodeStepMetadata(b []byte) (msgID string, created time.Time, ok bool) {
 		if ts, terr := parseFields(tsRaw); terr == nil {
 			sec, _ := firstVarint(ts, fieldTimestampSeconds)
 			nanos, _ := firstVarint(ts, fieldTimestampNanos)
-			created = time.Unix(int64(sec), int64(nanos)).UTC()
+			if sec > 0 {
+				created = time.Unix(int64(sec), int64(nanos)).UTC()
+			}
 		}
 	}
 	if usageRaw, present := firstBytes(top, fieldStepUsage); present {

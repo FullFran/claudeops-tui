@@ -271,3 +271,19 @@ func TestNormalizeModel(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeStepMetadataEmptyTimestamp(t *testing.T) {
+	created := buildTimestamp(0, 0)
+	blob := buildStepMetadata(created, nil)
+
+	msgID, ts, ok := DecodeStepMetadata(blob)
+	if !ok {
+		t.Fatal("DecodeStepMetadata: ok=false, want true")
+	}
+	if msgID != "" {
+		t.Errorf("msgID: got %q, want empty", msgID)
+	}
+	if !ts.IsZero() {
+		t.Errorf("created: got %v, want zero time", ts)
+	}
+}
