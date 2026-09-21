@@ -13,6 +13,7 @@
 #   ./scripts/update-pricing.sh
 #   EUR_FACTOR=1.0 ./scripts/update-pricing.sh      # keep USD numbers
 #   LITELLM_URL=<url> ./scripts/update-pricing.sh    # pin a different source
+#   ADD_ONLY=1 ./scripts/update-pricing.sh          # preserve all existing rates
 #
 set -euo pipefail
 
@@ -59,6 +60,14 @@ count="$(jq 'keys | length' "$converted")"
 if [ "$count" -lt 100 ]; then
   echo "error: refusing to write — only $count models parsed (source format changed?)" >&2
   exit 1
+fi
+
+# A bounded catalog update can add coverage without repricing existing models
+# or dropping historical IDs retired upstream. The default remains a full sync.
+if [ "${ADD_ONLY:-0}" = 1 ]; then
+  jq -cs '.[0] + .[1]' "$converted" "$out" > "$raw"
+  mv "$raw" "$converted"
+  count="$(jq 'keys | length' "$converted")"
 fi
 
 mv "$converted" "$out"
