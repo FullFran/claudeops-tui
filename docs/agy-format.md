@@ -116,7 +116,9 @@ other source):
 Both are stripped repeatedly to a fixed point, so a suffix nested inside an
 exp tag (`foo-exp-high`) also resolves. Pricing an `-exp` variant or a
 specific reasoning-effort call at its base model's rate is an equivalent-value
-inference — agy publishes no separate price for either.
+inference — agy publishes no separate price for either. Additionally, agy 1.2.7
+records Gemini Pro calls with the alias `gemini-pro-default`, which we map to
+`gemini-3.1-pro` as an equivalent-value inference; this may change when agy moves the alias.
 
 As of this writing, the bare forms resolve in `pricing.toml`
 (`gemini-3.8-flash`, `gemini-3.1-pro`, `claude-sonnet-4-6`, `gpt-oss-120b`);

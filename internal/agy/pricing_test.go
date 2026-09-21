@@ -21,6 +21,7 @@ func TestNormalizeModelResolvesToKnownPrice(t *testing.T) {
 		{"reasoning effort variant", "gemini-3.1-pro-high"},
 		{"already canonical", "claude-sonnet-4-6"},
 		{"reasoning effort on a different model", "gpt-oss-120b-medium"},
+		{"agy 1.2.7 Gemini Pro alias", "gemini-pro-default"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

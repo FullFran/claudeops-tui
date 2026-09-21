@@ -176,6 +176,13 @@ var reasoningEffortSuffixes = []string{"-high", "-medium", "-low", "-minimal"}
 // estimate of what that call was worth. Everything else — including
 // "-thinking", which pricing already handles — passes through unchanged.
 func NormalizeModel(raw string) string {
+	// agy 1.2.7 records Gemini Pro calls with the model alias ID "gemini-pro-default".
+	// We map it to "gemini-3.1-pro" (the only Pro model listed by `agy models` in 1.2.7)
+	// as an equivalent-value inference. This may change when agy moves the alias.
+	if raw == "gemini-pro-default" {
+		return "gemini-3.1-pro"
+	}
+
 	cur := raw
 	for {
 		if next, changed := stripExpTag(cur); changed {
