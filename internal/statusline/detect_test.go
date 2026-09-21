@@ -11,6 +11,7 @@ var agents = map[string]string{
 	"claude":   "claude",
 	"opencode": "codex",
 	"codex":    "codex",
+	"agy":      "antigravity",
 }
 
 func TestMatchKnown(t *testing.T) {
@@ -20,6 +21,7 @@ func TestMatchKnown(t *testing.T) {
 		"codex":             "codex",
 		"/usr/bin/claude":   "claude", // matched on the basename
 		"CLAUDE":            "claude", // and case-insensitively
+		"agy":               "antigravity",
 		"nvim":              "",
 		"":                  "",
 		"claude-code-extra": "", // no partial matches: exact basename only

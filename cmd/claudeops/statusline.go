@@ -25,6 +25,12 @@ type snapshotFetcher interface {
 // registryFetcher is the same for the provider registry.
 type registryFetcher interface {
 	FetchAll(ctx context.Context) []provider.Result
+	// FetchLocal fetches only the providers that read local on-disk state (see
+	// provider.Local), bypassing the registry's own TTL cache. It lets a
+	// render that otherwise trusts this command's own disk cache for the
+	// network providers still get a live answer for a provider like
+	// Antigravity, without the cost of a full FetchAll.
+	FetchLocal(ctx context.Context) []provider.Result
 }
 
 func cmdStatusline(args []string) error {
@@ -146,7 +152,29 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		if *forecast {
 			opts.Warning = exhaustionWarning(p, cached.Snapshot, now)
 		}
-		return emit(out, cached.Snapshot, cached.Providers, opts)
+		providers := cached.Providers
+		if wantRegistry {
+			// The provider section being "fresh" only speaks for the network
+			// providers in it. A local provider (Antigravity) reads a file a
+			// sibling process may have rewritten seconds ago, so it is always
+			// re-read live rather than trusted from the cache, and any local
+			// entry already on disk is scrubbed in the same pass — the fast
+			// path below is the common one, so a stale copy written before
+			// this fix shipped could otherwise sit there indefinitely.
+			if registry == nil {
+				registry = defaultRegistry(p)
+			}
+			lctx, lcancel := context.WithTimeout(context.Background(), *timeout)
+			display, persist := splitLocalProviders(lctx, registry, cached.Providers)
+			lcancel()
+			providers = display
+			if len(persist) != len(cached.Providers) {
+				fixed := cached
+				fixed.Providers = persist
+				_ = statusline.WriteCache(p.UsageCachePath, fixed)
+			}
+		}
+		return emit(out, cached.Snapshot, providers, opts)
 	}
 
 	if fetch == nil {
@@ -188,7 +216,11 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		// Stale beats blank. A quota from a minute ago still tells you roughly
 		// where you stand; an empty bar tells you nothing and looks like a bug.
 		if haveCache {
-			return emit(out, cached.Snapshot, cached.Providers, opts)
+			providers := cached.Providers
+			if wantRegistry {
+				providers, _ = splitLocalProviders(ctx, registry, cached.Providers)
+			}
+			return emit(out, cached.Snapshot, providers, opts)
 		}
 		return nil
 	}
@@ -202,9 +234,13 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 	// forward keeps the time it was really retrieved. Stamping the whole file
 	// with now is what let a Claude-only render vouch for a Codex reading it
 	// had never made, holding it fresh forever.
+	_, persistUsages := splitLocalProviders(ctx, registry, usages)
 	entry := statusline.Cached{
-		Snapshot:          snap,
-		Providers:         usages,
+		Snapshot: snap,
+		// A local provider is never persisted, fresh or not: writing it would
+		// let a later run — including an older binary that does not know to
+		// overlay it — serve that copy stale straight from disk again.
+		Providers:         persistUsages,
 		StoredAt:          cached.StoredAt,
 		ProvidersStoredAt: cached.ProvidersStoredAt,
 	}
@@ -308,6 +344,7 @@ func defaultRegistry(p config.Paths) *provider.Registry {
 		provider.NewCodex(),
 		provider.NewCopilot(),
 		provider.NewGemini(),
+		provider.NewAntigravity(p.AntigravityQuotaPath),
 	)
 	if gens, err := provider.LoadGeneric(filepath.Join(p.DataDir, "providers.toml")); err == nil {
 		for _, g := range gens {
@@ -315,6 +352,60 @@ func defaultRegistry(p config.Paths) *provider.Registry {
 		}
 	}
 	return r
+}
+
+// splitLocalProviders fetches every local provider (see provider.Local) live
+// and returns two views of cached: display is ready to render, with each
+// local provider's cached entry replaced by that live reading, or dropped
+// when the live fetch failed or found nothing — the same rule FetchAll
+// already applies to a provider's own errors — and appended in registry
+// order when it was missing from cached altogether; persist is ready to
+// write to usage-cache.json, with every local provider removed outright,
+// live or not, since a local provider must never reach that file (see the
+// callers).
+//
+// A provider that is currently unavailable (Available() false — Antigravity
+// with no snapshot on disk yet) is invisible to FetchLocal, so a cached entry
+// left over from when it was available is neither overlaid nor stripped
+// here; that is a rare, self-correcting edge case (the entry ages out once
+// something else refreshes the file) and not worth a heavier API for.
+func splitLocalProviders(ctx context.Context, registry registryFetcher, cached []provider.Usage) (display, persist []provider.Usage) {
+	local := registry.FetchLocal(ctx)
+	if len(local) == 0 {
+		return cached, cached
+	}
+	isLocalName := make(map[string]bool, len(local))
+	live := make(map[string]provider.Usage, len(local))
+	for _, r := range local {
+		isLocalName[r.Name] = true
+		if r.Err == nil && len(r.Usage.Windows) > 0 {
+			live[r.Name] = r.Usage
+		}
+	}
+
+	persist = make([]provider.Usage, 0, len(cached))
+	display = make([]provider.Usage, 0, len(cached)+len(local))
+	replaced := make(map[string]bool, len(local))
+	for _, u := range cached {
+		if !isLocalName[u.Provider] {
+			persist = append(persist, u)
+			display = append(display, u)
+			continue
+		}
+		replaced[u.Provider] = true
+		if u2, ok := live[u.Provider]; ok {
+			display = append(display, u2)
+		}
+	}
+	for _, r := range local {
+		if replaced[r.Name] {
+			continue
+		}
+		if u, ok := live[r.Name]; ok {
+			display = append(display, u)
+		}
+	}
+	return display, persist
 }
 
 func emit(out io.Writer, snap usage.Snapshot, providers []provider.Usage, opts statusline.Options) error {

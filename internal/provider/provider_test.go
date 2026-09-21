@@ -25,6 +25,16 @@ func (f *fakeProvider) Fetch(ctx context.Context) (Usage, error) {
 	return f.usage, f.err
 }
 
+// fakeLocalProvider is a fakeProvider that also declares itself local, the
+// way Antigravity does: it reads on-disk state a sibling process may have
+// just rewritten, so the registry must never serve it from the TTL cache or
+// back it off after an error.
+type fakeLocalProvider struct {
+	fakeProvider
+}
+
+func (f *fakeLocalProvider) Local() bool { return true }
+
 func TestRegistryFetchAll(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -192,5 +202,67 @@ func TestRegistrySuccessClearsBackoff(t *testing.T) {
 
 	if p.calls != 4 {
 		t.Errorf("Fetch called %d times, want 4", p.calls)
+	}
+}
+
+func TestRegistryFetchAllAlwaysFetchesLocalProviders(t *testing.T) {
+	local := &fakeLocalProvider{fakeProvider{name: "Antigravity", available: true, usage: Usage{Provider: "Antigravity"}}}
+	network := &fakeProvider{name: "Codex", available: true, usage: Usage{Provider: "Codex"}}
+	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	r := NewRegistry(local, network)
+	r.TTL = time.Minute
+	r.now = func() time.Time { return now }
+
+	r.FetchAll(context.Background())
+	now = now.Add(10 * time.Second) // well within TTL
+	results := r.FetchAll(context.Background())
+
+	if local.calls != 2 {
+		t.Errorf("local provider fetched %d times, want 2 (never served from the TTL cache)", local.calls)
+	}
+	if network.calls != 1 {
+		t.Errorf("network provider fetched %d times, want 1 (still served from cache within TTL)", network.calls)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+}
+
+func TestRegistryLocalProviderErrorIsNotBackedOff(t *testing.T) {
+	wantErr := errors.New("read failed")
+	local := &fakeLocalProvider{fakeProvider{name: "Antigravity", available: true, err: wantErr}}
+	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	r := NewRegistry(local)
+	r.ErrBackoff = time.Minute
+	r.now = func() time.Time { return now }
+
+	r.FetchAll(context.Background())
+	now = now.Add(time.Second) // well inside what would be the network backoff window
+	results := r.FetchAll(context.Background())
+
+	if local.calls != 2 {
+		t.Errorf("local provider fetched %d times, want 2 (a failing local read is cheap to retry)", local.calls)
+	}
+	if len(results) != 1 || !errors.Is(results[0].Err, wantErr) {
+		t.Errorf("error not surfaced from the fresh fetch: %+v", results)
+	}
+}
+
+func TestRegistryFetchLocalReturnsOnlyAvailableLocalProviders(t *testing.T) {
+	local := &fakeLocalProvider{fakeProvider{name: "Antigravity", available: true, usage: Usage{Provider: "Antigravity"}}}
+	network := &fakeProvider{name: "Codex", available: true, usage: Usage{Provider: "Codex"}}
+	unavailableLocal := &fakeLocalProvider{fakeProvider{name: "Other", available: false}}
+	r := NewRegistry(local, network, unavailableLocal)
+
+	results := r.FetchLocal(context.Background())
+
+	if len(results) != 1 || results[0].Name != "Antigravity" {
+		t.Errorf("FetchLocal() = %+v, want only the available local provider", results)
+	}
+	if network.calls != 0 {
+		t.Errorf("FetchLocal must not touch network providers, got %d calls", network.calls)
+	}
+	if unavailableLocal.calls != 0 {
+		t.Errorf("FetchLocal must not fetch an unavailable local provider, got %d calls", unavailableLocal.calls)
 	}
 }

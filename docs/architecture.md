@@ -9,11 +9,13 @@ internal/
   parser/    typed Claude JSONL line decoder
   codex/     Codex rollout parser + CODEX_HOME resolution
   opencode/  poller for opencode's SQLite database
+  agy/       poller for Google Antigravity CLI's per-conversation SQLite DBs,
+             protobuf usage decoder, status-line quota snapshot, settings.json editing
   collector/ fsnotify watcher with persisted byte offsets
   store/     SQLite (modernc) schema + queries
   pricing/   TOML loader + per-event cost calculator
   usage/     /api/oauth/usage client + OAuth refresh + locked atomic creds I/O
-  provider/  pluggable live-quota adapters (Codex, Copilot, Gemini, generic)
+  provider/  pluggable live-quota adapters (Codex, Copilot, Gemini, Antigravity, generic)
   live/      live Claude Code session discovery (Classroom tab)
   hooks/     Claude Code hook install/uninstall/status/handle
   export/    OTLP metric push + Claude Code OTel env var management
@@ -35,6 +37,7 @@ $CODEX_HOME/sessions/**  ────┤ fsnotify + persisted byte offsets
                         collector ──→ LineParser ──→ []source.Record ──┐
                              │                                          │
 opencode.db ──5s poll──→ opencode.Ingester ────────────────────────────┤
+agy conversations/*.db ──5s poll──→ agy.Ingester (per-conversation watermark) ┤
                                                                         ▼
                                                               source.StoreSink
                                                                         │
@@ -55,9 +58,12 @@ usage refresh ────────────────┴─→ POST con
 ## Concurrency model
 
 - `cmdTUI` starts one goroutine per enabled line-based source collector (claude,
-  codex), plus two for the opencode poller: one running `Watch`, one watching
-  `ConsecutiveFailures` so a poll that keeps failing is reported. `Watch` never
-  returns on a failing poll, so the first cannot see one.
+  codex), plus two each for the opencode and agy pollers: one running `Watch`,
+  one watching `ConsecutiveFailures` so a poll that keeps failing is reported.
+  `Watch` never returns on a failing poll, so the first cannot see one. Unlike
+  opencode's single shared database, agy's poll fans out across every
+  `<uuid>.db` file under `conversations/`, with a watermark kept per
+  conversation — one corrupted conversation does not block the rest.
 - Each collector runs **one** fsnotify event loop. Events mark files dirty; a
   500ms ticker flushes the dirty set by re-reading each file sequentially from
   its persisted offset. There is no goroutine per file.
@@ -122,6 +128,9 @@ the transaction opens, so it produces no WAL frame.
 | `~/.claude/projects/*/` | Claude Code | source data — read only |
 | `~/.codex/sessions/**` | Codex CLI | source data — read only (parent dir overridable with `CODEX_HOME`) |
 | `$XDG_DATA_HOME/opencode/opencode.db` | opencode | source data — read only (default `~/.local/share`; the conventional path is probed as a fallback) |
+| `~/.gemini/antigravity-cli/conversations/*.db` | agy | source data — one SQLite per conversation, read only |
+| `~/.gemini/antigravity-cli/conversation_summaries.db` | agy | conversation → workspace map, read only |
+| `~/.gemini/antigravity-cli/settings.json` | agy (shared) | claudeops manages only its `statusLine` key (`claudeops agy setup/remove`) |
 | `~/.claude/.credentials.json` | Claude Code (shared) | OAuth tokens — locked, atomic refresh only |
 | `~/.claude/.credentials.json.lock` | claudeops | advisory lock sidecar |
 | `~/.claude/settings.json` | Claude Code (shared) | claudeops manages only its hook entries and OTel env vars |
@@ -131,3 +140,4 @@ the transaction opens, so it produces no WAL frame.
 | `~/.claudeops/providers.toml` | claudeops | optional user-defined quota providers |
 | `~/.claudeops/current-task.json` | claudeops | sidecar for task tracking |
 | `~/.claudeops/live/` | claudeops | hook-written live session sidecars |
+| `~/.claudeops/antigravity-quota.json` | claudeops | agy quota snapshot, written by `claudeops agy statusline` |

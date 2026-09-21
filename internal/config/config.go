@@ -13,7 +13,7 @@ import (
 // SourceConfig describes one ingestion source.
 // A [[sources]] array in config.toml maps to this type.
 type SourceConfig struct {
-	Name    string `toml:"name"`    // "claude" | "codex" | "opencode"
+	Name    string `toml:"name"`    // "claude" | "codex" | "opencode" | "agy"
 	Root    string `toml:"root"`    // path to scan/poll; empty uses the per-source default
 	Format  string `toml:"format"`  // "jsonl" | "sqlite" (informational, not enforced here)
 	Enabled bool   `toml:"enabled"` // whether to start a collector for this source
@@ -245,6 +245,7 @@ func DefaultSettings() Settings {
 				"opencode": "codex",
 				"codex":    "codex",
 				"crush":    "codex",
+				"agy":      "antigravity",
 			},
 		},
 		Export: ExportSettings{

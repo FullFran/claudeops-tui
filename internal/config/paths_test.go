@@ -8,14 +8,15 @@ import (
 func TestForHome(t *testing.T) {
 	p := ForHome("/tmp/fakehome")
 	cases := map[string]string{
-		p.ClaudeDir:       "/tmp/fakehome/.claude",
-		p.ClaudeProjects:  "/tmp/fakehome/.claude/projects",
-		p.ClaudeCreds:     "/tmp/fakehome/.claude/.credentials.json",
-		p.DataDir:         "/tmp/fakehome/.claudeops",
-		p.DBPath:          "/tmp/fakehome/.claudeops/claudeops.db",
-		p.PricingPath:     "/tmp/fakehome/.claudeops/pricing.toml",
-		p.CurrentTaskPath: "/tmp/fakehome/.claudeops/current-task.json",
-		p.ConfigPath:      "/tmp/fakehome/.claudeops/config.toml",
+		p.ClaudeDir:            "/tmp/fakehome/.claude",
+		p.ClaudeProjects:       "/tmp/fakehome/.claude/projects",
+		p.ClaudeCreds:          "/tmp/fakehome/.claude/.credentials.json",
+		p.DataDir:              "/tmp/fakehome/.claudeops",
+		p.DBPath:               "/tmp/fakehome/.claudeops/claudeops.db",
+		p.PricingPath:          "/tmp/fakehome/.claudeops/pricing.toml",
+		p.CurrentTaskPath:      "/tmp/fakehome/.claudeops/current-task.json",
+		p.ConfigPath:           "/tmp/fakehome/.claudeops/config.toml",
+		p.AntigravityQuotaPath: "/tmp/fakehome/.claudeops/antigravity-quota.json",
 	}
 	for got, want := range cases {
 		if got != want {

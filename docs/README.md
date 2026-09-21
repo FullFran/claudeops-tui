@@ -1,6 +1,6 @@
 # ClaudeOps TUI — Documentation
 
-Local TUI to track Claude Code, Codex and opencode usage, costs, and tasks.
+Local TUI to track Claude Code, Codex, opencode and Google Antigravity CLI (agy) usage, costs, and tasks.
 
 ## Index
 
@@ -8,6 +8,7 @@ Local TUI to track Claude Code, Codex and opencode usage, costs, and tasks.
 - [upgrading.md](./upgrading.md) — behavior changes that need action from you
 - [providers.md](./providers.md) — built-in and user-defined live quota providers
 - [jsonl-format.md](./jsonl-format.md) — observed Claude Code and Codex event shapes
+- [agy-format.md](./agy-format.md) — observed Google Antigravity CLI conversation database format
 - [oauth-usage-endpoint.md](./oauth-usage-endpoint.md) — undocumented `/api/oauth/usage` reference
 - [RELEASING.md](./RELEASING.md) — how a release is cut, tagged, and published
 - [limitations.md](./limitations.md) — known gaps, risks, fragile dependencies

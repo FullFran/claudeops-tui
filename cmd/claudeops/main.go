@@ -1,7 +1,7 @@
 // Command claudeops is the entrypoint. With no subcommand it launches the TUI
 // dashboard. Subcommands are: task start|stop|list, ingest, reingest, update,
 // hooks install|uninstall|status|handle, push, otel-config apply|status|remove,
-// mcp and version.
+// statusline, agy statusline|setup|remove|status, mcp and version.
 package main
 
 import (
@@ -21,6 +21,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	agyingester "github.com/fullfran/claudeops-tui/internal/agy"
 	"github.com/fullfran/claudeops-tui/internal/buildinfo"
 	"github.com/fullfran/claudeops-tui/internal/codex"
 	"github.com/fullfran/claudeops-tui/internal/collector"
@@ -61,6 +62,7 @@ var (
 	runStatuslineCommand = cmdStatusline
 	runPushCommand       = cmdPush
 	runOTelConfigCommand = cmdOTelConfig
+	runAgyCommand        = cmdAgy
 )
 
 func run() error {
@@ -97,6 +99,8 @@ func runArgs(args []string) error {
 		return runOTelConfigCommand(args[1:])
 	case "statusline":
 		return runStatuslineCommand(args[1:])
+	case "agy":
+		return runAgyCommand(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -132,6 +136,10 @@ Usage:
   claudeops statusline enable | disable         turn the status line on or off
   claudeops statusline status                   show whether it is on, and which provider
   claudeops statusline doctor                   explain what each provider can see, and why
+  claudeops agy statusline                      print agy's status line (wired as its own statusLine command)
+  claudeops agy setup [--force]                 wire claudeops as agy's status line
+  claudeops agy remove                          remove claudeops as agy's status line
+  claudeops agy status                          show whether agy is wired up, and the last quota reading
   claudeops hooks status                        show which hooks are registered
   claudeops hooks handle                        handle a Claude Code hook event on stdin (invoked by Claude Code)
   claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
@@ -272,6 +280,8 @@ func buildCollectors(sources []config.SourceConfig, sk source.Sink, claudeRoot s
 			cols = append(cols, namedCollector{sc.Name, collector.NewWithSource(source.Codex, root, sk, lp, nil)})
 		case "opencode":
 			// opencode is a DB-poller, not a Collector. Handled by buildOpencodeIngester.
+		case "agy":
+			// agy is a per-conversation DB-poller, not a Collector. Handled by buildAgyIngester.
 		default:
 			fmt.Fprintf(os.Stderr, "claudeops: source %q not yet implemented, skipping\n", sc.Name)
 		}
@@ -285,18 +295,24 @@ func opencodeDefaultDBPath() string {
 	return ocingester.DefaultDBPath()
 }
 
+// agyDefaultRoot returns the conventional agy data directory
+// (~/.gemini/antigravity-cli), resolved the way agy itself resolves it.
+func agyDefaultRoot() string {
+	return agyingester.DefaultRoot()
+}
+
 // resolveSources returns the effective source list. When the user has not
 // configured any sources explicitly, it auto-detects which tools are present on
-// disk — claude always, plus codex and opencode when their data exists — so
-// multi-tool usage shows up on the dashboard without manual config, the way
+// disk — claude always, plus codex, opencode and agy when their data exists —
+// so multi-tool usage shows up on the dashboard without manual config, the way
 // CodexBar auto-detects providers. An explicit [[sources]] config always wins.
 func resolveSources(settings config.Settings) []config.SourceConfig {
-	return resolveSourcesWith(settings, codex.CodexRoot(), opencodeDefaultDBPath())
+	return resolveSourcesWith(settings, codex.CodexRoot(), opencodeDefaultDBPath(), agyDefaultRoot())
 }
 
 // resolveSourcesWith is the testable core of resolveSources: it probes the
-// given codex sessions dir and opencode DB path for existence.
-func resolveSourcesWith(settings config.Settings, codexRoot, opencodeDB string) []config.SourceConfig {
+// given codex sessions dir, opencode DB path, and agy root for existence.
+func resolveSourcesWith(settings config.Settings, codexRoot, opencodeDB, agyRoot string) []config.SourceConfig {
 	if len(settings.Sources) > 0 {
 		return settings.Sources
 	}
@@ -306,6 +322,11 @@ func resolveSourcesWith(settings config.Settings, codexRoot, opencodeDB string) 
 	}
 	if fileExists(opencodeDB) {
 		srcs = append(srcs, config.SourceConfig{Name: "opencode", Enabled: true})
+	}
+	// agy has no single DB file to probe — one per conversation — so presence
+	// is judged by the conversations directory existing at all.
+	if dirExists(filepath.Join(agyRoot, "conversations")) {
+		srcs = append(srcs, config.SourceConfig{Name: "agy", Enabled: true})
 	}
 	return srcs
 }
@@ -349,6 +370,27 @@ func buildOpencodeIngester(sources []config.SourceConfig, s *store.Store, sk sou
 	return nil
 }
 
+// buildAgyIngester builds an agy Ingester when the agy source is enabled in
+// sources, or returns nil if it is absent or disabled. Mirrors
+// buildOpencodeIngester — see its doc comment for why the concrete type is
+// returned rather than source.Ingester (LastErr/ConsecutiveFailures).
+func buildAgyIngester(sources []config.SourceConfig, s *store.Store, sk source.Sink) *agyingester.Ingester {
+	for _, sc := range sources {
+		if sc.Name != "agy" {
+			continue
+		}
+		if !sc.Enabled {
+			return nil
+		}
+		root := sc.Root
+		if root == "" {
+			root = agyDefaultRoot()
+		}
+		return agyingester.NewIngester(root, s, sk)
+	}
+	return nil
+}
+
 func cmdTUI() error {
 	p, c, err := openCore()
 	if err != nil {
@@ -364,8 +406,9 @@ func cmdTUI() error {
 	srcs := resolveSources(settings)
 	cols := collectorsFor(srcs, sink, p, c)
 
-	// opencode DB-poller: independent of the Collector loop.
+	// opencode and agy DB-pollers: independent of the Collector loop.
 	ocIng := buildOpencodeIngester(srcs, c.store, sink)
+	agyIng := buildAgyIngester(srcs, c.store, sink)
 
 	// The program is built before ingestion starts so pricing warnings can be
 	// routed into it first — see wirePricingWarnings for why the order matters.
@@ -388,6 +431,11 @@ func cmdTUI() error {
 		// Watch never returns on a failing poll, so the watchdog above cannot
 		// see one. This is what does.
 		go supervisePollErrors(ctx, name, ocIng, &health, stallInterval)
+	}
+	if agyIng != nil {
+		name := agyIng.Name().String()
+		go superviseWatch(ctx, name, agyIng.Watch, &health)
+		go supervisePollErrors(ctx, name, agyIng, &health, stallInterval)
 	}
 
 	_, err = prog.Run()
@@ -429,6 +477,7 @@ func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model 
 		provider.NewCodex(),
 		provider.NewCopilot(),
 		provider.NewGemini(),
+		provider.NewAntigravity(p.AntigravityQuotaPath),
 	)
 	// User-defined providers: any service with a token + HTTP endpoint can be
 	// tracked via ~/.claudeops/providers.toml without a code change.
@@ -555,9 +604,9 @@ func (r ingestResult) err() error {
 }
 
 // buildIngestUnits assembles a one-shot cold ingest of every enabled source
-// (claude + codex collectors, plus the opencode DB poller). It mirrors the
-// cold-ingest pass cmdTUI runs on startup, so CLI ingest and the TUI agree on
-// coverage.
+// (claude + codex collectors, plus the opencode and agy DB pollers). It
+// mirrors the cold-ingest pass cmdTUI runs on startup, so CLI ingest and the
+// TUI agree on coverage.
 func buildIngestUnits(p config.Paths, c *core) []ingestUnit {
 	sink := source.NewStoreSinkWithTasks(c.store, c.calc, c.tasks)
 	srcs := resolveSources(loadSettings(p, io.Discard))
@@ -574,6 +623,15 @@ func buildIngestUnits(p config.Paths, c *core) []ingestUnit {
 	}
 	if ocIng := buildOpencodeIngester(srcs, c.store, sink); ocIng != nil {
 		units = append(units, ingestUnit{name: "opencode", ingest: ocIng.IngestExisting})
+	}
+	if agyIng := buildAgyIngester(srcs, c.store, sink); agyIng != nil {
+		units = append(units, ingestUnit{
+			name:   "agy",
+			ingest: agyIng.IngestExisting,
+			counts: func() (int64, int64, int64) {
+				return agyIng.IngestedCount(), 0, agyIng.ParseErrorCount()
+			},
+		})
 	}
 	return units
 }

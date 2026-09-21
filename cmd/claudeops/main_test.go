@@ -104,6 +104,23 @@ func TestRunArgsDispatchesUpdateCommand(t *testing.T) {
 	}
 }
 
+func TestRunArgsDispatchesAgyCommand(t *testing.T) {
+	var gotArgs []string
+	prev := runAgyCommand
+	runAgyCommand = func(args []string) error {
+		gotArgs = args
+		return nil
+	}
+	defer func() { runAgyCommand = prev }()
+
+	if err := runArgs([]string{"agy", "status"}); err != nil {
+		t.Fatalf("runArgs(agy status): %v", err)
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != "status" {
+		t.Fatalf("expected agy to receive [status], got %v", gotArgs)
+	}
+}
+
 func TestRunArgsDispatchesReingestCommand(t *testing.T) {
 	var gotArgs []string
 	prev := runReingestCommand

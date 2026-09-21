@@ -286,3 +286,70 @@ func TestLoadInvalidTOMLReturnsError(t *testing.T) {
 		t.Error("expected parse error")
 	}
 }
+
+func TestDefaultSettingsMapsAgyToAntigravity(t *testing.T) {
+	got := DefaultSettings().Statusline.Agents["agy"]
+	if got != "antigravity" {
+		t.Errorf(`Statusline.Agents["agy"] = %q, want "antigravity"`, got)
+	}
+}
+
+// TestLoadMergesNewAgentDefaultIntoExistingTable is a regression test for a
+// real question: an existing user's config.toml predates the agy entry and
+// already has its own [statusline.agents] table (even one that overrides
+// every key BurntSushi/toml knew about at the time). Load must still merge
+// the newly-added "agy" default in, or every pre-agy install would need a
+// manual config edit to get live quota in the status line.
+func TestLoadMergesNewAgentDefaultIntoExistingTable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	// Mirrors the pre-agy default table verbatim, with no "agy" key — exactly
+	// what an existing install's config.toml looks like today.
+	if err := os.WriteFile(path, []byte(`
+[statusline.agents]
+claude = "claude"
+opencode = "codex"
+codex = "codex"
+crush = "codex"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Statusline.Agents["agy"]; got != "antigravity" {
+		t.Errorf(`existing config.toml should still merge in Agents["agy"] = "antigravity", got %q (agents=%v)`,
+			got, s.Statusline.Agents)
+	}
+	// The user's own entries must survive the merge untouched.
+	for k, want := range map[string]string{"claude": "claude", "opencode": "codex", "codex": "codex", "crush": "codex"} {
+		if got := s.Statusline.Agents[k]; got != want {
+			t.Errorf("Agents[%q] = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// TestLoadUserAgentOverrideSurvivesMerge confirms the merge goes both ways:
+// a user override for one key is not clobbered by the default map, and
+// unrelated defaults (including the new "agy" one) still come through.
+func TestLoadUserAgentOverrideSurvivesMerge(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[statusline.agents]
+opencode = "claude"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Statusline.Agents["opencode"]; got != "claude" {
+		t.Errorf(`Agents["opencode"] = %q, want the user override "claude"`, got)
+	}
+	if got := s.Statusline.Agents["agy"]; got != "antigravity" {
+		t.Errorf(`Agents["agy"] = %q, want the untouched default "antigravity"`, got)
+	}
+}
