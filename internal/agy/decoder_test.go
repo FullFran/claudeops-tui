@@ -260,6 +260,7 @@ func TestNormalizeModel(t *testing.T) {
 		{"bare exp suffix", "gemini-3.1-pro-exp", "gemini-3.1-pro"},
 		{"reasoning effort low", "gemini-3.1-pro-low", "gemini-3.1-pro"},
 		{"reasoning effort minimal", "gemini-3.1-pro-minimal", "gemini-3.1-pro"},
+		{"agy 1.2.7 Gemini Pro alias", "gemini-pro-default", "gemini-3.1-pro"},
 		{"thinking suffix passes through (pricing handles it)", "claude-opus-4-6-thinking", "claude-opus-4-6-thinking"},
 		{"nested effort inside exp tag reaches fixed point", "gemini-3.8-flash-exp-a-high", "gemini-3.8-flash"},
 	}
@@ -269,5 +270,21 @@ func TestNormalizeModel(t *testing.T) {
 				t.Errorf("NormalizeModel(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDecodeStepMetadataEmptyTimestamp(t *testing.T) {
+	created := buildTimestamp(0, 0)
+	blob := buildStepMetadata(created, nil)
+
+	msgID, ts, ok := DecodeStepMetadata(blob)
+	if !ok {
+		t.Fatal("DecodeStepMetadata: ok=false, want true")
+	}
+	if msgID != "" {
+		t.Errorf("msgID: got %q, want empty", msgID)
+	}
+	if !ts.IsZero() {
+		t.Errorf("created: got %v, want zero time", ts)
 	}
 }

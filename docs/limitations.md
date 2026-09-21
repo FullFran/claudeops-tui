@@ -64,7 +64,9 @@ here. Other things worth knowing:
 - Antigravity IDE data under `~/.gemini/antigravity/` (as opposed to the CLI's
   `~/.gemini/antigravity-cli/`) is not read; its format is unverified.
 - Cost shown for agy calls is the equivalent API value at LiteLLM rates —
-  Antigravity itself is subscription/quota based, not billed per call.
+  Antigravity itself is subscription/quota based, not billed per call. agy 1.2.7
+  records Gemini Pro calls with the alias `gemini-pro-default`, which we map to
+  `gemini-3.1-pro` as an equivalent-value inference.
 
 ### Pricing table goes stale
 
