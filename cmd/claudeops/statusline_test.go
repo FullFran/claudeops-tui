@@ -22,7 +22,8 @@ import (
 // about the Anthropic path.
 type emptyRegistry struct{}
 
-func (emptyRegistry) FetchAll(context.Context) []provider.Result { return nil }
+func (emptyRegistry) FetchAll(context.Context) []provider.Result   { return nil }
+func (emptyRegistry) FetchLocal(context.Context) []provider.Result { return nil }
 
 type fakeFetcher struct {
 	snap  usage.Snapshot
@@ -240,6 +241,10 @@ func TestStatuslineEmptySnapshotPrintsNothing(t *testing.T) {
 // fakeRegistry returns fixed provider results without touching the network.
 type fakeRegistry struct{ usages []provider.Usage }
 
+// FetchLocal always returns nil: none of fakeRegistry's fixed usages stand in
+// for a local provider, so there is nothing to answer with.
+func (f fakeRegistry) FetchLocal(context.Context) []provider.Result { return nil }
+
 func (f fakeRegistry) FetchAll(context.Context) []provider.Result {
 	out := make([]provider.Result, 0, len(f.usages))
 	for _, u := range f.usages {
@@ -316,6 +321,8 @@ type failingRegistry struct{}
 func (failingRegistry) FetchAll(context.Context) []provider.Result {
 	return []provider.Result{{Name: "Codex", Err: errors.New("token rejected")}}
 }
+
+func (failingRegistry) FetchLocal(context.Context) []provider.Result { return nil }
 
 func TestStatuslineDisabledPrintsNothing(t *testing.T) {
 	// Disabled must short-circuit before any work: no fetch, no cache read.
@@ -438,6 +445,10 @@ type countingRegistry struct {
 	usages []provider.Usage
 	calls  *int
 }
+
+// FetchLocal always returns nil: none of countingRegistry's fixed usages
+// stand in for a local provider, so there is nothing to answer with.
+func (c countingRegistry) FetchLocal(context.Context) []provider.Result { return nil }
 
 func (c countingRegistry) FetchAll(context.Context) []provider.Result {
 	*c.calls++
@@ -672,5 +683,142 @@ func TestStatuslineDefaultsDoNotReadTheHostTerminal(t *testing.T) {
 	}
 	if f.calls != 1 {
 		t.Errorf("expected one Anthropic fetch, got %d", f.calls)
+	}
+}
+
+// fakeLocalRegistry separates a local provider's live reading (FetchLocal)
+// from the network results FetchAll would also fold it into, mirroring how
+// provider.Registry behaves after Antigravity was made a local provider: a
+// full FetchAll always includes a fresh local reading, while FetchLocal
+// answers for the local provider alone and is cheaper than a full FetchAll.
+type fakeLocalRegistry struct {
+	network         []provider.Usage
+	local           provider.Usage
+	localErr        error
+	fetchAllCalls   *int
+	fetchLocalCalls *int
+}
+
+func (r fakeLocalRegistry) localResult() provider.Result {
+	return provider.Result{Name: r.local.Provider, Usage: r.local, Err: r.localErr}
+}
+
+func (r fakeLocalRegistry) FetchAll(context.Context) []provider.Result {
+	if r.fetchAllCalls != nil {
+		*r.fetchAllCalls++
+	}
+	out := make([]provider.Result, 0, len(r.network)+1)
+	for _, u := range r.network {
+		out = append(out, provider.Result{Name: u.Provider, Usage: u})
+	}
+	return append(out, r.localResult())
+}
+
+func (r fakeLocalRegistry) FetchLocal(context.Context) []provider.Result {
+	if r.fetchLocalCalls != nil {
+		*r.fetchLocalCalls++
+	}
+	return []provider.Result{r.localResult()}
+}
+
+func antigravityResult(util float64) provider.Usage {
+	return provider.Usage{
+		Provider: "Antigravity",
+		Windows:  []provider.Window{{Label: "5h", Utilization: util}},
+	}
+}
+
+func TestStatuslineOverlaysLocalProviderMissingFromFreshCache(t *testing.T) {
+	// A cache written before Antigravity had ever reported anything: the
+	// provider section as a whole is fresh, but there is no entry for it at
+	// all. It must still show up live rather than staying absent until the
+	// cache eventually goes stale.
+	p := statuslinePaths(t, "claude")
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17),
+		[]provider.Usage{codexResult(12)}, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	var fetchAllCalls, fetchLocalCalls int
+	reg := fakeLocalRegistry{
+		network:         []provider.Usage{codexResult(12)},
+		local:           antigravityResult(6),
+		fetchAllCalls:   &fetchAllCalls,
+		fetchLocalCalls: &fetchLocalCalls,
+	}
+	f := &fakeFetcher{snap: snapAt(99)} // must never be reached: the snapshot is fresh too
+
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "antigravity"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "5h 6%" {
+		t.Errorf("got %q, want the live Antigravity value", got)
+	}
+
+	out.Reset()
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "all", "--labels"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "claude 5h 17% │ codex 5h 12% │ antigravity 5h 6%" {
+		t.Errorf("got %q, want claude and Codex from cache and Antigravity live", got)
+	}
+
+	if f.calls != 0 {
+		t.Errorf("a fully fresh cache must not fetch Anthropic, got %d calls", f.calls)
+	}
+	if fetchAllCalls != 0 {
+		t.Errorf("a fresh provider cache must not trigger a full registry fetch, got %d FetchAll calls", fetchAllCalls)
+	}
+	if fetchLocalCalls == 0 {
+		t.Error("expected the local provider to be fetched live at least once")
+	}
+
+	c, err := statusline.ReadCache(p.UsageCachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range c.Providers {
+		if strings.EqualFold(u.Provider, "antigravity") {
+			t.Errorf("local provider must never be persisted, found %+v", u)
+		}
+	}
+}
+
+func TestStatuslineOverlaysStaleLocalProviderInFreshCache(t *testing.T) {
+	// The disk cache being "fresh" only speaks for the network providers in
+	// it: Antigravity reads a file agy's own status-line invocation may have
+	// rewritten seconds ago, so even a provider section written moments ago
+	// must not be trusted for it.
+	p := statuslinePaths(t, "claude")
+	if err := statusline.WriteCache(p.UsageCachePath, statusline.NewCached(snapAt(17),
+		[]provider.Usage{codexResult(12), antigravityResult(99)}, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	var fetchAllCalls, fetchLocalCalls int
+	reg := fakeLocalRegistry{
+		network:         []provider.Usage{codexResult(12)},
+		local:           antigravityResult(6),
+		fetchAllCalls:   &fetchAllCalls,
+		fetchLocalCalls: &fetchLocalCalls,
+	}
+	f := &fakeFetcher{snap: snapAt(999)} // must never be reached
+
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "antigravity"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "5h 6%" {
+		t.Errorf("got %q, want the live value rather than the stale 99%% from cache", got)
+	}
+	if fetchAllCalls != 0 {
+		t.Errorf("network providers must still be served from cache within TTL, got %d FetchAll calls", fetchAllCalls)
+	}
+
+	c, err := statusline.ReadCache(p.UsageCachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers) != 1 || !strings.EqualFold(c.Providers[0].Provider, "codex") {
+		t.Errorf("the stale local entry must be dropped from the cache on disk, got %+v", c.Providers)
 	}
 }

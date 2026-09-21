@@ -30,6 +30,13 @@ func NewAntigravity(snapshotPath string) *Antigravity {
 // Name implements Provider.
 func (a *Antigravity) Name() string { return "Antigravity" }
 
+// Local implements the provider.Local marker interface: the quota snapshot on
+// disk is rewritten by `claudeops agy statusline` whenever agy's own state
+// changes, so caching a fetch here like a network provider would show a
+// reading stale by as much as the registry's TTL even though a fresher one
+// might already be sitting on disk.
+func (a *Antigravity) Local() bool { return true }
+
 // Available reports whether a quota snapshot has ever been written. There is
 // no credential to check — agy's own status-line invocation is the only
 // signal this provider has that agy is even in use.

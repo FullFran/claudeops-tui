@@ -66,6 +66,28 @@ type Result struct {
 	Err   error
 }
 
+// Local marks a Provider that reads local on-disk state rather than a network
+// endpoint — Antigravity, which serves the quota snapshot
+// `claudeops agy statusline` rewrites in place whenever agy's own state
+// changes. The Registry never applies TTL caching or error backoff to one: a
+// local read is cheap, and caching it the way a network provider is cached
+// would show a reading stale by as much as the TTL even though the file on
+// disk may have changed seconds ago.
+//
+// Provider itself is left unchanged so a provider that does not implement
+// this — every network-backed one, and any user-defined generic provider —
+// keeps today's caching behaviour exactly.
+type Local interface {
+	Local() bool
+}
+
+// isLocal reports whether p declares itself local through the Local marker
+// interface.
+func isLocal(p Provider) bool {
+	l, ok := p.(Local)
+	return ok && l.Local()
+}
+
 // Cache defaults. The TUI refreshes on a 2s tick, so without caching every
 // provider would be polled ~1800 times per hour; these windows keep the poll
 // rate close to the usage package's own 5-minute cache.
@@ -127,12 +149,36 @@ func (r *Registry) FetchAll(ctx context.Context) []Result {
 			continue
 		}
 		name := p.Name()
+		if isLocal(p) {
+			// Never cached, never backed off: see the Local doc comment.
+			u, err := p.Fetch(ctx)
+			out = append(out, Result{Name: name, Usage: u, Err: err})
+			continue
+		}
 		if cached, ok := r.cached(name); ok {
 			out = append(out, cached)
 			continue
 		}
 		u, err := p.Fetch(ctx)
 		out = append(out, r.store(name, Result{Name: name, Usage: u, Err: err}))
+	}
+	return out
+}
+
+// FetchLocal fetches only the registered providers that declare themselves
+// local (see Local), skipping every network-backed one entirely. It exists so
+// a caller that otherwise trusts an external cache for the network providers
+// — the statusline command serving its on-disk usage-cache.json — can still
+// get a live answer for the providers a stale copy would misrepresent,
+// without the cost of a full FetchAll.
+func (r *Registry) FetchLocal(ctx context.Context) []Result {
+	out := make([]Result, 0, len(r.providers))
+	for _, p := range r.providers {
+		if !isLocal(p) || !p.Available() {
+			continue
+		}
+		u, err := p.Fetch(ctx)
+		out = append(out, Result{Name: p.Name(), Usage: u, Err: err})
 	}
 	return out
 }
