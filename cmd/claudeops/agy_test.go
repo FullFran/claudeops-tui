@@ -32,8 +32,8 @@ func TestCmdAgyStatusline(t *testing.T) {
 				t.Errorf("persisted snapshot must not contain %q:\n%s", forbidden, raw)
 			}
 		}
-		if !strings.Contains(out.String(), "gemini-weekly") {
-			t.Errorf("stdout = %q, want the gemini-weekly bucket", out.String())
+		if !strings.Contains(out.String(), "7d") {
+			t.Errorf("stdout = %q, want the 7d bucket", out.String())
 		}
 		if !strings.Contains(out.String(), "6%") {
 			t.Errorf("stdout = %q, want ~6%% used", out.String())
@@ -118,7 +118,7 @@ func TestCmdAgyStatusline(t *testing.T) {
 		if err := cmdAgyStatusline(p, strings.NewReader(`{"plan_tier":"Pro","agent_state":"idle"}`), &out); err != nil {
 			t.Fatalf("cmdAgyStatusline: %v", err)
 		}
-		if !strings.Contains(out.String(), "gemini-weekly") {
+		if !strings.Contains(out.String(), "7d") {
 			t.Errorf("stdout = %q, want the previously persisted bucket", out.String())
 		}
 	})
@@ -357,7 +357,7 @@ func TestCmdAgyStatus(t *testing.T) {
 		if err := cmdAgyStatus(p, settingsPath, &out); err != nil {
 			t.Fatalf("status: %v", err)
 		}
-		if !strings.Contains(out.String(), "gemini-weekly") {
+		if !strings.Contains(out.String(), "7d") {
 			t.Errorf("output missing bucket:\n%s", out.String())
 		}
 	})

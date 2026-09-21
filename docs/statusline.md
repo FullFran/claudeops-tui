@@ -264,7 +264,7 @@ settings:    ~/.gemini/antigravity-cli/settings.json
 status line: wired to claudeops
 quota:       observed 12s ago
   5h                59.00% used  resets in 4h1m
-  weekly             6.00% used  resets in 6d3h
+  7d                 6.00% used  resets in 6d3h
 
 $ claudeops agy remove
 removed the claudeops status line from ~/.gemini/antigravity-cli/settings.json

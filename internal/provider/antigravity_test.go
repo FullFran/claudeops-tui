@@ -57,8 +57,8 @@ func TestAntigravityFetch(t *testing.T) {
 		t.Fatalf("got %d windows, want 1: %+v", len(u.Windows), u.Windows)
 	}
 	w := u.Windows[0]
-	if w.Label != "gemini-weekly" {
-		t.Errorf("Label = %q, want gemini-weekly", w.Label)
+	if w.Label != "7d" {
+		t.Errorf("Label = %q, want 7d", w.Label)
 	}
 	if w.Utilization < 6.21 || w.Utilization > 6.23 {
 		t.Errorf("Utilization = %v, want ~6.22", w.Utilization)
@@ -99,8 +99,8 @@ func TestAntigravityFetchDropsExpiredBucket(t *testing.T) {
 	if len(u.Windows) != 1 {
 		t.Fatalf("got %d windows, want 1 (expired bucket dropped): %+v", len(u.Windows), u.Windows)
 	}
-	if u.Windows[0].Label != "gemini-daily" {
-		t.Errorf("Label = %q, want gemini-daily", u.Windows[0].Label)
+	if u.Windows[0].Label != "1d" {
+		t.Errorf("Label = %q, want 1d", u.Windows[0].Label)
 	}
 }
 
@@ -135,14 +135,17 @@ func TestAntigravityFetchMissingSnapshot(t *testing.T) {
 }
 
 func TestAntigravityFetchDeterministicOrder(t *testing.T) {
-	// Map iteration is randomised; the rendered order must not flicker
-	// between runs the way statusline.DetectAgent's doc comment warns about.
+	// Primary windows (5h, 7d) come first to match Claude and Codex,
+	// followed by any other primary windows, then 3p windows, then extras.
 	path := filepath.Join(t.TempDir(), "antigravity-quota.json")
 	now := fixedNow()
 	snap := agy.QuotaSnapshot{
 		ObservedAt: now,
 		Buckets: map[string]agy.QuotaBucket{
+			"3p-weekly":     {RemainingFraction: 0.8, ResetTime: now.Add(time.Hour)},
 			"gemini-weekly": {RemainingFraction: 0.9, ResetTime: now.Add(time.Hour)},
+			"3p-5h":         {RemainingFraction: 0.7, ResetTime: now.Add(time.Hour)},
+			"gemini-5h":     {RemainingFraction: 0.3, ResetTime: now.Add(time.Hour)},
 			"gemini-daily":  {RemainingFraction: 0.5, ResetTime: now.Add(time.Hour)},
 			"gemini-hourly": {RemainingFraction: 0.1, ResetTime: now.Add(time.Hour)},
 		},
@@ -155,7 +158,7 @@ func TestAntigravityFetchDeterministicOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	want := []string{"gemini-daily", "gemini-hourly", "gemini-weekly"} // sorted
+	want := []string{"5h", "7d", "1d", "1h", "3p-5h", "3p-7d"}
 	if len(u.Windows) != len(want) {
 		t.Fatalf("got %d windows, want %d", len(u.Windows), len(want))
 	}
@@ -163,5 +166,35 @@ func TestAntigravityFetchDeterministicOrder(t *testing.T) {
 		if u.Windows[i].Label != label {
 			t.Errorf("Windows[%d].Label = %q, want %q", i, u.Windows[i].Label, label)
 		}
+	}
+}
+
+func TestNormalizeAntigravityBucketLabel(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"gemini-5h", "5h"},
+		{"gemini-weekly", "7d"},
+		{"gemini-daily", "1d"},
+		{"gemini-hourly", "1h"},
+		{"3p-5h", "3p-5h"},
+		{"3p-weekly", "3p-7d"},
+		{"3p-daily", "3p-1d"},
+		{"3p-hourly", "3p-1h"},
+		{"5h", "5h"},
+		{"7d", "7d"},
+		{"weekly", "7d"},
+		{"daily", "1d"},
+		{"hourly", "1h"},
+		{"custom-bucket", "custom-bucket"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got := NormalizeAntigravityBucketLabel(tc.in)
+			if got != tc.want {
+				t.Errorf("NormalizeAntigravityBucketLabel(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }

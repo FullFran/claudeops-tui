@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/fullfran/claudeops-tui/internal/agy"
@@ -72,15 +73,26 @@ func AntigravityUsage(snap agy.QuotaSnapshot, now time.Time) Usage {
 	// Buckets is a map; iterate in a fixed order so the rendered line does not
 	// flicker between runs the way statusline.DetectAgent's doc comment warns
 	// map iteration otherwise would.
-	labels := make([]string, 0, len(snap.Buckets))
+	//
+	// Primary windows (5h, 7d) are placed first to match the status-line layout
+	// of Claude and Codex, and so that `statusline --reset` inspects the primary
+	// 5h window rather than a secondary lane.
+	rawLabels := make([]string, 0, len(snap.Buckets))
 	for label := range snap.Buckets {
-		labels = append(labels, label)
+		rawLabels = append(rawLabels, label)
 	}
-	sort.Strings(labels)
+	sort.Slice(rawLabels, func(i, j int) bool {
+		pi := agyLabelPriority(NormalizeAntigravityBucketLabel(rawLabels[i]))
+		pj := agyLabelPriority(NormalizeAntigravityBucketLabel(rawLabels[j]))
+		if pi != pj {
+			return pi < pj
+		}
+		return rawLabels[i] < rawLabels[j]
+	})
 
-	windows := make([]Window, 0, len(labels))
-	for _, label := range labels {
-		b := snap.Buckets[label]
+	windows := make([]Window, 0, len(rawLabels))
+	for _, raw := range rawLabels {
+		b := snap.Buckets[raw]
 		if !b.ResetTime.IsZero() && b.ResetTime.Before(now) {
 			continue
 		}
@@ -91,7 +103,11 @@ func AntigravityUsage(snap agy.QuotaSnapshot, now time.Time) Usage {
 		case util > 100:
 			util = 100
 		}
-		windows = append(windows, Window{Label: label, Utilization: util, ResetsAt: b.ResetTime})
+		windows = append(windows, Window{
+			Label:       NormalizeAntigravityBucketLabel(raw),
+			Utilization: util,
+			ResetsAt:    b.ResetTime,
+		})
 	}
 
 	u := Usage{Provider: "Antigravity", Windows: windows, FetchedAt: snap.ObservedAt}
@@ -99,4 +115,55 @@ func AntigravityUsage(snap agy.QuotaSnapshot, now time.Time) Usage {
 		u.Note = "plan: " + snap.PlanTier
 	}
 	return u
+}
+
+// NormalizeAntigravityBucketLabel shortens Antigravity bucket labels to match
+// the compact conventions of Claude and Codex:
+//   - "gemini-5h"     -> "5h"
+//   - "gemini-weekly" -> "7d"
+//   - "3p-weekly"     -> "3p-7d"
+//   - "3p-5h"         -> "3p-5h"
+func NormalizeAntigravityBucketLabel(raw string) string {
+	label := strings.TrimPrefix(raw, "gemini-")
+	switch {
+	case label == "weekly":
+		return "7d"
+	case strings.HasSuffix(label, "-weekly"):
+		return strings.TrimSuffix(label, "-weekly") + "-7d"
+	case label == "daily":
+		return "1d"
+	case strings.HasSuffix(label, "-daily"):
+		return strings.TrimSuffix(label, "-daily") + "-1d"
+	case label == "hourly":
+		return "1h"
+	case strings.HasSuffix(label, "-hourly"):
+		return strings.TrimSuffix(label, "-hourly") + "-1h"
+	default:
+		return label
+	}
+}
+
+// agyLabelPriority orders primary windows (5h, 7d) first to match Claude and
+// Codex, followed by any other primary windows, then 3p windows, then extras.
+func agyLabelPriority(label string) int {
+	switch label {
+	case "5h":
+		return 1
+	case "7d":
+		return 2
+	case "1d":
+		return 3
+	case "1h":
+		return 4
+	case "3p-5h":
+		return 10
+	case "3p-7d":
+		return 11
+	case "3p-1d":
+		return 12
+	case "3p-1h":
+		return 13
+	default:
+		return 100
+	}
 }

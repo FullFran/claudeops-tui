@@ -29,6 +29,7 @@ Last updated: 2026-09-21
 
 | Skill | Trigger / description | Scope | Path |
 | --- | --- | --- | --- |
+| `antigravity-subagent` | Dispatches tasks, background jobs, or second-opinion reviews to Google Antigravity CLI (agy) as a specialized subagent. Use to offload heavy refactoring, bulk generation, repository-wide exploration, or dual reviews while preserving context and leveraging Google AI Pro quota. | user | `/home/franblakia/.config/agents/skills/antigravity-subagent/SKILL.md` |
 | `architecture-blueprint-generator` | Comprehensive project architecture blueprint generator that analyzes codebases to create detailed architectural documentation. Automatically detects technology stacks and architectural patterns, generates visual diagrams, documents implementation patterns, and provides extensible blueprints for maintaining architectural consistency and guiding new development. | user | `/home/franblakia/.config/agents/skills/architecture-blueprint-generator/SKILL.md` |
 | `architecture-decision-record` | Help the team document and maintain Architecture Decision Records (ADRs). | user | `/home/franblakia/.config/agents/skills/architecture-decision-record/SKILL.md` |
 | `branch-pr` | Create Gentle AI pull requests with issue-first checks. Trigger: creating, opening, or preparing PRs for review. | user | `/home/franblakia/.config/agents/skills/branch-pr/SKILL.md` |
