@@ -26,6 +26,10 @@ type Paths struct {
 	// UsageCachePath is the status line's own cache: registry providers, plus
 	// the last good snapshot to fall back on when a refresh fails.
 	UsageCachePath string // ~/.claudeops/usage-cache.json
+	// AntigravityQuotaPath is the Google Antigravity CLI (agy) quota snapshot,
+	// written by `claudeops agy statusline` from agy's own status-line
+	// payload and read back by provider.Antigravity. Owned by internal/agy.
+	AntigravityQuotaPath string // ~/.claudeops/antigravity-quota.json
 }
 
 // Default builds Paths from the user's HOME (or HOME override for tests).
@@ -42,19 +46,20 @@ func ForHome(home string) Paths {
 	claude := filepath.Join(home, ".claude")
 	data := filepath.Join(home, ".claudeops")
 	return Paths{
-		Home:              home,
-		ClaudeDir:         claude,
-		ClaudeProjects:    filepath.Join(claude, "projects"),
-		ClaudeCreds:       filepath.Join(claude, ".credentials.json"),
-		ClaudeSettings:    filepath.Join(claude, "settings.json"),
-		DataDir:           data,
-		DBPath:            filepath.Join(data, "claudeops.db"),
-		PricingPath:       filepath.Join(data, "pricing.toml"),
-		CurrentTaskPath:   filepath.Join(data, "current-task.json"),
-		ConfigPath:        filepath.Join(data, "config.toml"),
-		LiveDir:           filepath.Join(data, "live"),
-		SnapshotCachePath: filepath.Join(data, "snapshot-cache.json"),
-		UsageCachePath:    filepath.Join(data, "usage-cache.json"),
+		Home:                 home,
+		ClaudeDir:            claude,
+		ClaudeProjects:       filepath.Join(claude, "projects"),
+		ClaudeCreds:          filepath.Join(claude, ".credentials.json"),
+		ClaudeSettings:       filepath.Join(claude, "settings.json"),
+		DataDir:              data,
+		DBPath:               filepath.Join(data, "claudeops.db"),
+		PricingPath:          filepath.Join(data, "pricing.toml"),
+		CurrentTaskPath:      filepath.Join(data, "current-task.json"),
+		ConfigPath:           filepath.Join(data, "config.toml"),
+		LiveDir:              filepath.Join(data, "live"),
+		SnapshotCachePath:    filepath.Join(data, "snapshot-cache.json"),
+		UsageCachePath:       filepath.Join(data, "usage-cache.json"),
+		AntigravityQuotaPath: filepath.Join(data, "antigravity-quota.json"),
 	}
 }
 

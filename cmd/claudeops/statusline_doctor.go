@@ -92,12 +92,12 @@ func cmdStatuslineDoctor(p config.Paths, out io.Writer, settings config.Settings
 
 	// Providers with no credentials never reach FetchAll, so name them anyway.
 	// "absent" is the answer to "why is Copilot missing"; silence is not.
-	for _, known := range []string{"codex", "copilot", "gemini"} {
+	for _, known := range []string{"codex", "copilot", "gemini", "antigravity"} {
 		if !seen[known] {
 			rows = append(rows, doctorRow{
 				name:   known,
 				state:  stateAbsent,
-				detail: "no credentials found",
+				detail: absentDetail(known),
 				remedy: remedyFor(known),
 			})
 		}
@@ -221,6 +221,16 @@ func summariseWindows(windows []provider.Window, note, source string) string {
 	return s
 }
 
+// absentDetail explains why a provider with no credentials or data is
+// missing. Antigravity has no credential of its own to check — it has no
+// live endpoint at all — so "no credentials found" would be a lie.
+func absentDetail(name string) string {
+	if name == "antigravity" {
+		return "no quota reported yet"
+	}
+	return "no credentials found"
+}
+
 func remedyFor(name string) string {
 	switch name {
 	case "codex":
@@ -229,6 +239,8 @@ func remedyFor(name string) string {
 		return "sign in with the GitHub Copilot CLI, or your editor's Copilot extension"
 	case "gemini":
 		return "run `gemini auth`, or sign in to google through opencode"
+	case "antigravity":
+		return "run `claudeops agy setup` to wire claudeops as agy's status line"
 	default:
 		return ""
 	}

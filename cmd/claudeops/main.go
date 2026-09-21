@@ -1,7 +1,7 @@
 // Command claudeops is the entrypoint. With no subcommand it launches the TUI
 // dashboard. Subcommands are: task start|stop|list, ingest, reingest, update,
 // hooks install|uninstall|status|handle, push, otel-config apply|status|remove,
-// mcp and version.
+// statusline, agy statusline|setup|remove|status, mcp and version.
 package main
 
 import (
@@ -62,6 +62,7 @@ var (
 	runStatuslineCommand = cmdStatusline
 	runPushCommand       = cmdPush
 	runOTelConfigCommand = cmdOTelConfig
+	runAgyCommand        = cmdAgy
 )
 
 func run() error {
@@ -98,6 +99,8 @@ func runArgs(args []string) error {
 		return runOTelConfigCommand(args[1:])
 	case "statusline":
 		return runStatuslineCommand(args[1:])
+	case "agy":
+		return runAgyCommand(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -133,6 +136,10 @@ Usage:
   claudeops statusline enable | disable         turn the status line on or off
   claudeops statusline status                   show whether it is on, and which provider
   claudeops statusline doctor                   explain what each provider can see, and why
+  claudeops agy statusline                      print agy's status line (wired as its own statusLine command)
+  claudeops agy setup [--force]                 wire claudeops as agy's status line
+  claudeops agy remove                          remove claudeops as agy's status line
+  claudeops agy status                          show whether agy is wired up, and the last quota reading
   claudeops hooks status                        show which hooks are registered
   claudeops hooks handle                        handle a Claude Code hook event on stdin (invoked by Claude Code)
   claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
@@ -470,6 +477,7 @@ func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model 
 		provider.NewCodex(),
 		provider.NewCopilot(),
 		provider.NewGemini(),
+		provider.NewAntigravity(p.AntigravityQuotaPath),
 	)
 	// User-defined providers: any service with a token + HTTP endpoint can be
 	// tracked via ~/.claudeops/providers.toml without a code change.

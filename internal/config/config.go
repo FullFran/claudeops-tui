@@ -245,6 +245,7 @@ func DefaultSettings() Settings {
 				"opencode": "codex",
 				"codex":    "codex",
 				"crush":    "codex",
+				"agy":      "antigravity",
 			},
 		},
 		Export: ExportSettings{

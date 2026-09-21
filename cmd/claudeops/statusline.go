@@ -308,6 +308,7 @@ func defaultRegistry(p config.Paths) *provider.Registry {
 		provider.NewCodex(),
 		provider.NewCopilot(),
 		provider.NewGemini(),
+		provider.NewAntigravity(p.AntigravityQuotaPath),
 	)
 	if gens, err := provider.LoadGeneric(filepath.Join(p.DataDir, "providers.toml")); err == nil {
 		for _, g := range gens {

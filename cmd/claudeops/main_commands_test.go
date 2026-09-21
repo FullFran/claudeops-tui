@@ -481,6 +481,7 @@ func TestPrintHelpListsEverySubcommand(t *testing.T) {
 		"task start", "task stop", "task list", "ingest", "reingest", "update",
 		"hooks install", "hooks uninstall", "hooks status", "hooks handle",
 		"push", "otel-config apply", "mcp", "version",
+		"agy statusline", "agy setup", "agy remove", "agy status",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help output is missing %q", want)
