@@ -12,6 +12,8 @@ Local TUI to track Claude Code, Codex, opencode and Google Antigravity CLI (agy)
 - [oauth-usage-endpoint.md](./oauth-usage-endpoint.md) — undocumented `/api/oauth/usage` reference
 - [RELEASING.md](./RELEASING.md) — how a release is cut, tagged, and published
 - [limitations.md](./limitations.md) — known gaps, risks, fragile dependencies
+- [quota-and-family-sharing.md](./quota-and-family-sharing.md) — Google AI Pro, Antigravity quota, and family-sharing evidence
+- [competitors.md](./competitors.md) — primary-source competitor comparison and improvement priorities
 - [plan.md](./plan.md) — original vision, what shipped, what did not
 
 ## On specs
