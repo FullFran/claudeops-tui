@@ -194,7 +194,11 @@ func TestSeedIncludesCurrentAnthropicLineup(t *testing.T) {
 		model string
 		want  ModelPrice
 	}{
+		{"claude-fable-5-1", ModelPrice{Input: 9.20, Output: 46.00, CacheRead: 0.23, CacheCreate: 11.50}},
 		{"claude-fable-5", ModelPrice{Input: 9.20, Output: 46.00, CacheRead: 0.92, CacheCreate: 11.50}},
+		{"claude-mythos-5-1", ModelPrice{Input: 9.20, Output: 46.00, CacheRead: 0.23, CacheCreate: 11.50}},
+		{"claude-opus-5-5", ModelPrice{Input: 3.68, Output: 18.40, CacheRead: 0.184, CacheCreate: 4.60}},
+		{"claude-opus-5", ModelPrice{Input: 4.60, Output: 23.00, CacheRead: 0.46, CacheCreate: 5.75}},
 		{"claude-opus-4-8", ModelPrice{Input: 4.60, Output: 23.00, CacheRead: 0.46, CacheCreate: 5.75}},
 		{"claude-sonnet-4-6", ModelPrice{Input: 2.76, Output: 13.80, CacheRead: 0.276, CacheCreate: 3.45}},
 		{"claude-haiku-4-5", ModelPrice{Input: 0.92, Output: 4.60, CacheRead: 0.092, CacheCreate: 1.15}},
@@ -346,9 +350,12 @@ func TestSeedPricesOtherProviders(t *testing.T) {
 	c.OnWarn = func(string) {}
 	for _, model := range []string{
 		"claude-sonnet-5",
+		"gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
 		"gpt-5", "gpt-5-codex", "gpt-5.1-codex", "gpt-4o", "o3",
+		"gemini-3.8-flash", "gemini-3.1-pro", "gemini-3-flash",
 		"gemini-2.5-pro", "gemini-2.5-flash",
-		"openai/gpt-5", "google/gemini-2.5-flash",
+		"gpt-oss-120b",
+		"openai/gpt-6-astra", "google/gemini-3.8-flash",
 	} {
 		if got := c.CostFor(model, 1_000_000, 1_000_000, 0, 0); got == nil || *got == 0 {
 			t.Errorf("seed does not price %q (got %v)", model, got)

@@ -9,20 +9,47 @@
 # Currency: EUR.  Adjust if you want USD — the calculator does not convert.
 # EUR figures are USD list price x 0.92.
 #
-# updated: 2026-07-11
+# updated: 2026-09-26
 
-updated = "2026-07-11"
+updated = "2026-09-26"
 currency = "EUR"
 
-# Fable 5 tier: $10 in / $50 out / $1.00 cache-read / $12.50 cache-write(5m).
+# Fable 5 tier: $10 in / $50 out / $0.25-$1.00 cache-read / $12.50 cache-write(5m).
 # New top tier above Opus. Claude Code may report it with a context-window
 # suffix ("claude-fable-5[1m]"); the calculator strips bracket suffixes and
 # falls back to this entry.
+[models."claude-fable-5-1"]
+input         =  9.20
+output        = 46.00
+cache_read    =  0.23
+cache_create  = 11.50
+
 [models."claude-fable-5"]
 input         =  9.20
 output        = 46.00
 cache_read    =  0.92
 cache_create  = 11.50
+
+# Mythos 5 tier: $10 in / $50 out / $0.25 cache-read / $12.50 cache-write(5m).
+[models."claude-mythos-5-1"]
+input         =  9.20
+output        = 46.00
+cache_read    =  0.23
+cache_create  = 11.50
+
+# Opus 5.5 tier: $4 in / $20 out / $0.20 cache-read / $5.00 cache-write(5m).
+[models."claude-opus-5-5"]
+input         =  3.68
+output        = 18.40
+cache_read    =  0.184
+cache_create  =  4.60
+
+# Opus 5 tier: $5 in / $25 out / $0.50 cache-read / $6.25 cache-write(5m).
+[models."claude-opus-5"]
+input         =  4.60
+output        = 23.00
+cache_read    =  0.46
+cache_create  =  5.75
 
 # Opus 4.5+ tier: $5 in / $25 out / $0.50 cache-read / $6.25 cache-write(5m).
 # Anthropic cut Opus pricing at 4.5 and it has held steady through 4.8.
@@ -110,6 +137,28 @@ output        =  9.20
 cache_read    =  0.184
 cache_create  =  2.30
 
+# OpenAI GPT-6 family:
+# Astra: $10 in / $50 out / $1.00 cache-read / $12.50 cache-write.
+[models."gpt-6-astra"]
+input         =  9.20
+output        = 46.00
+cache_read    =  0.92
+cache_create  = 11.50
+
+# Sol: $2 in / $10 out / $0.20 cache-read / $2.50 cache-write.
+[models."gpt-6-sol"]
+input         =  1.84
+output        =  9.20
+cache_read    =  0.184
+cache_create  =  2.30
+
+# Luna: $0.10 in / $0.50 out / $0.01 cache-read / $0.125 cache-write.
+[models."gpt-6-luna"]
+input         =  0.092
+output        =  0.46
+cache_read    =  0.0092
+cache_create  =  0.115
+
 # OpenAI GPT-5 family (and Codex variants): $1.25 in / $10 out / $0.125 cached.
 [models."gpt-5"]
 input         =  1.15
@@ -166,6 +215,43 @@ output        =  4.048
 cache_read    =  0.253
 cache_create  =  0.00
 
+# Google Gemini 3 family.
+[models."gemini-3.8-flash"]
+input         =  0.69
+output        =  3.45
+cache_read    =  0.069
+cache_create  =  0.00
+
+[models."gemini-3.7-flash"]
+input         =  0.69
+output        =  3.45
+cache_read    =  0.069
+cache_create  =  0.00
+
+[models."gemini-3.6-flash"]
+input         =  0.69
+output        =  3.45
+cache_read    =  0.069
+cache_create  =  0.00
+
+[models."gemini-3.1-pro"]
+input         =  1.84
+output        = 11.04
+cache_read    =  0.00
+cache_create  =  0.00
+
+[models."gemini-3-flash"]
+input         =  0.46
+output        =  2.76
+cache_read    =  0.046
+cache_create  =  0.00
+
+[models."gemini-3-flash-preview"]
+input         =  0.46
+output        =  2.76
+cache_read    =  0.046
+cache_create  =  0.00
+
 # Google Gemini 2.5 family.
 [models."gemini-2.5-pro"]
 input         =  1.15
@@ -177,4 +263,11 @@ cache_create  =  0.00
 input         =  0.276
 output        =  2.30
 cache_read    =  0.0276
+cache_create  =  0.00
+
+# Open source models (Groq, etc.)
+[models."gpt-oss-120b"]
+input         =  0.138
+output        =  0.552
+cache_read    =  0.00
 cache_create  =  0.00

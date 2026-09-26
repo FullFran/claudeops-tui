@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// Rates verified against LiteLLM model_prices_and_context_window.json at
-// ce83fac3515c36c927ed133fe48abd7dc1a3ee74 (2026-09-15), in USD per MTok.
+// Rates verified against LiteLLM model_prices_and_context_window.json, in USD per MTok.
 func TestCatalogRefreshNewModels(t *testing.T) {
 	for _, tt := range []struct {
 		model string
@@ -16,6 +15,12 @@ func TestCatalogRefreshNewModels(t *testing.T) {
 		{"openai/gpt-6-astra", [4]float64{10, 50, 1, 12.5}},
 		{"claude-fable-5-1", [4]float64{10, 50, 0.25, 12.5}},
 		{"gemini-3.8-flash", [4]float64{0.75, 3.75, 0.075, 0}},
+		{"claude-opus-5-5", [4]float64{4, 20, 0.20, 5}},
+		{"claude-opus-5", [4]float64{5, 25, 0.50, 6.25}},
+		{"gpt-6-sol", [4]float64{2, 10, 0.20, 2.5}},
+		{"gpt-6-luna", [4]float64{0.10, 0.50, 0.01, 0.125}},
+		{"gemini-3.1-pro", [4]float64{2, 12, 0, 0}},
+		{"gpt-oss-120b", [4]float64{0.15, 0.60, 0, 0}},
 	} {
 		t.Run(tt.model, func(t *testing.T) {
 			calc := NewCalculator(&Table{Models: map[string]ModelPrice{}})
