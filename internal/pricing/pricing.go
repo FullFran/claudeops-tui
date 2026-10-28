@@ -7,8 +7,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -268,6 +270,10 @@ func (t *Table) Validate() error {
 	return nil
 }
 
+func isNonFinite(f float64) bool {
+	return math.IsNaN(f) || math.IsInf(f, 0)
+}
+
 func validatePrice(name string, mp ModelPrice) error {
 	if mp.Input < 0 || mp.Output < 0 || mp.CacheRead < 0 || mp.CacheCreate < 0 || mp.CacheCreate1h < 0 {
 		return fmt.Errorf("pricing: model %q has negative rate", name)
@@ -275,6 +281,9 @@ func validatePrice(name string, mp ModelPrice) error {
 	for i, tier := range mp.Tiers {
 		if tier.Threshold <= 0 {
 			return fmt.Errorf("pricing: model %q tier[%d] has non-positive threshold %d", name, i, tier.Threshold)
+		}
+		if isNonFinite(tier.Input) || isNonFinite(tier.Output) || isNonFinite(tier.CacheRead) || isNonFinite(tier.CacheCreate) || isNonFinite(tier.CacheCreate1h) {
+			return fmt.Errorf("pricing: model %q tier[%d] has non-finite rate", name, i)
 		}
 		if tier.Input < 0 || tier.Output < 0 || tier.CacheRead < 0 || tier.CacheCreate < 0 || tier.CacheCreate1h < 0 {
 			return fmt.Errorf("pricing: model %q tier[%d] has negative rate", name, i)
@@ -291,6 +300,9 @@ func validatePrice(name string, mp ModelPrice) error {
 		}
 		if _, err := parseCutoffDate(s.EffectiveDate); err != nil {
 			return fmt.Errorf("pricing: model %q schedule[%d] has invalid effective_date %q: %w", name, i, s.EffectiveDate, err)
+		}
+		if isNonFinite(s.Input) || isNonFinite(s.Output) || isNonFinite(s.CacheRead) || isNonFinite(s.CacheCreate) || isNonFinite(s.CacheCreate1h) {
+			return fmt.Errorf("pricing: model %q schedule[%d] has non-finite rate", name, i)
 		}
 		if s.Input < 0 || s.Output < 0 || s.CacheRead < 0 || s.CacheCreate < 0 || s.CacheCreate1h < 0 {
 			return fmt.Errorf("pricing: model %q schedule[%d] has negative rate", name, i)
@@ -361,6 +373,14 @@ func mergeMissingModels(current, seed *Table) (*Table, bool) {
 	return merged, changed
 }
 
+func formatRate(f float64) string {
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
+		s += ".0"
+	}
+	return s
+}
+
 func encodeTable(t *Table) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("# claudeops pricing table.\n")
@@ -382,12 +402,12 @@ func encodeTable(t *Table) []byte {
 	for i, name := range models {
 		price := t.Models[name]
 		fmt.Fprintf(&buf, "[models.%q]\n", name)
-		fmt.Fprintf(&buf, "input         = %5.4f\n", price.Input)
-		fmt.Fprintf(&buf, "output        = %5.4f\n", price.Output)
-		fmt.Fprintf(&buf, "cache_read    = %5.4f\n", price.CacheRead)
-		fmt.Fprintf(&buf, "cache_create  = %5.4f\n", price.CacheCreate)
+		fmt.Fprintf(&buf, "input         = %s\n", formatRate(price.Input))
+		fmt.Fprintf(&buf, "output        = %s\n", formatRate(price.Output))
+		fmt.Fprintf(&buf, "cache_read    = %s\n", formatRate(price.CacheRead))
+		fmt.Fprintf(&buf, "cache_create  = %s\n", formatRate(price.CacheCreate))
 		if price.CacheCreate1h > 0 {
-			fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", price.CacheCreate1h)
+			fmt.Fprintf(&buf, "cache_create_1h = %s\n", formatRate(price.CacheCreate1h))
 		}
 		for _, tier := range price.Tiers {
 			buf.WriteString("\n")
@@ -396,24 +416,24 @@ func encodeTable(t *Table) []byte {
 			if tier.EffectiveDate != "" {
 				fmt.Fprintf(&buf, "effective_date = %q\n", tier.EffectiveDate)
 			}
-			fmt.Fprintf(&buf, "input         = %5.4f\n", tier.Input)
-			fmt.Fprintf(&buf, "output        = %5.4f\n", tier.Output)
-			fmt.Fprintf(&buf, "cache_read    = %5.4f\n", tier.CacheRead)
-			fmt.Fprintf(&buf, "cache_create  = %5.4f\n", tier.CacheCreate)
+			fmt.Fprintf(&buf, "input         = %s\n", formatRate(tier.Input))
+			fmt.Fprintf(&buf, "output        = %s\n", formatRate(tier.Output))
+			fmt.Fprintf(&buf, "cache_read    = %s\n", formatRate(tier.CacheRead))
+			fmt.Fprintf(&buf, "cache_create  = %s\n", formatRate(tier.CacheCreate))
 			if tier.CacheCreate1h > 0 {
-				fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", tier.CacheCreate1h)
+				fmt.Fprintf(&buf, "cache_create_1h = %s\n", formatRate(tier.CacheCreate1h))
 			}
 		}
 		for _, sched := range price.Schedule {
 			buf.WriteString("\n")
 			fmt.Fprintf(&buf, "[[models.%q.schedule]]\n", name)
 			fmt.Fprintf(&buf, "effective_date = %q\n", sched.EffectiveDate)
-			fmt.Fprintf(&buf, "input         = %5.4f\n", sched.Input)
-			fmt.Fprintf(&buf, "output        = %5.4f\n", sched.Output)
-			fmt.Fprintf(&buf, "cache_read    = %5.4f\n", sched.CacheRead)
-			fmt.Fprintf(&buf, "cache_create  = %5.4f\n", sched.CacheCreate)
+			fmt.Fprintf(&buf, "input         = %s\n", formatRate(sched.Input))
+			fmt.Fprintf(&buf, "output        = %s\n", formatRate(sched.Output))
+			fmt.Fprintf(&buf, "cache_read    = %s\n", formatRate(sched.CacheRead))
+			fmt.Fprintf(&buf, "cache_create  = %s\n", formatRate(sched.CacheCreate))
 			if sched.CacheCreate1h > 0 {
-				fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", sched.CacheCreate1h)
+				fmt.Fprintf(&buf, "cache_create_1h = %s\n", formatRate(sched.CacheCreate1h))
 			}
 		}
 		if i < len(models)-1 {
@@ -445,15 +465,6 @@ func NewCalculator(t *Table) *Calculator {
 	return &Calculator{t: t, missing: map[string]bool{}}
 }
 
-// CostFor computes the EUR cost for an event with the given token classes.
-// Returns nil if the model is unknown (and triggers OnWarn once).
-//
-// Decorated model IDs — "claude-fable-5[1m]", "openai/gpt-5",
-// "google/antigravity-gemini-3-pro", "ollama/kimi-k2.5:cloud" — fall back to
-// the progressively less decorated forms ModelIDCandidates derives, so the
-// table can be keyed by bare model name regardless of which source emitted the
-// event. Explicitly free variants ("…-free", "…:free") cost €0 unless the
-// table carries an exact entry for them.
 // CostFor computes the EUR cost for an event with the given token classes.
 // Returns nil if the model is unknown (and triggers OnWarn once).
 //
@@ -509,6 +520,10 @@ func (c *Calculator) CostForEvent(model string, in, out, cacheRead, cacheCreate,
 		return nil
 	}
 
+	if cacheCreate1h > cacheCreate {
+		cacheCreate1h = cacheCreate
+	}
+
 	effectiveMP := mp
 
 	// 1. Evaluate scheduled rates when timestamp is non-zero
@@ -530,67 +545,55 @@ func (c *Calculator) CostForEvent(model string, in, out, cacheRead, cacheCreate,
 			}
 		}
 		if latestSched != nil {
-			if latestSched.Input > 0 {
-				effectiveMP.Input = latestSched.Input
-			}
-			if latestSched.Output > 0 {
-				effectiveMP.Output = latestSched.Output
-			}
-			if latestSched.CacheRead > 0 {
-				effectiveMP.CacheRead = latestSched.CacheRead
-			}
-			if latestSched.CacheCreate > 0 {
-				effectiveMP.CacheCreate = latestSched.CacheCreate
-			}
-			if latestSched.CacheCreate1h > 0 {
-				effectiveMP.CacheCreate1h = latestSched.CacheCreate1h
-			}
+			effectiveMP.Input = latestSched.Input
+			effectiveMP.Output = latestSched.Output
+			effectiveMP.CacheRead = latestSched.CacheRead
+			effectiveMP.CacheCreate = latestSched.CacheCreate
+			effectiveMP.CacheCreate1h = latestSched.CacheCreate1h
 		}
 	}
 
 	// 2. Evaluate context tiers (prompt context threshold)
 	if len(mp.Tiers) > 0 {
-		actualCacheCreate := cacheCreate
-		if cacheCreate1h > actualCacheCreate {
-			actualCacheCreate = cacheCreate1h
-		}
 		isHaiku := strings.Contains(NormalizeModelID(model), "haiku") || strings.Contains(strings.ToLower(model), "haiku")
 		promptTokens := in + cacheRead
 		if isHaiku {
-			promptTokens += actualCacheCreate
+			promptTokens += cacheCreate
 		}
 
 		var activeTier *PriceTier
+		var activeCutoff time.Time
 		for _, tier := range mp.Tiers {
+			var cutoff time.Time
+			if tier.EffectiveDate != "" {
+				if ts.IsZero() {
+					continue
+				}
+				var err error
+				cutoff, err = parseCutoffDate(tier.EffectiveDate)
+				if err != nil || ts.UTC().Before(cutoff) {
+					continue
+				}
+			}
 			if promptTokens > tier.Threshold {
-				if activeTier == nil || tier.Threshold > activeTier.Threshold {
+				if activeTier == nil ||
+					tier.Threshold > activeTier.Threshold ||
+					(tier.Threshold == activeTier.Threshold && cutoff.After(activeCutoff)) {
 					tCopy := tier
 					activeTier = &tCopy
+					activeCutoff = cutoff
 				}
 			}
 		}
 		if activeTier != nil {
-			if activeTier.Input > 0 {
-				effectiveMP.Input = activeTier.Input
-			}
-			if activeTier.Output > 0 {
-				effectiveMP.Output = activeTier.Output
-			}
-			if activeTier.CacheRead > 0 {
-				effectiveMP.CacheRead = activeTier.CacheRead
-			}
-			if activeTier.CacheCreate > 0 {
-				effectiveMP.CacheCreate = activeTier.CacheCreate
-			}
-			if activeTier.CacheCreate1h > 0 {
-				effectiveMP.CacheCreate1h = activeTier.CacheCreate1h
-			}
+			effectiveMP.Input = activeTier.Input
+			effectiveMP.Output = activeTier.Output
+			effectiveMP.CacheRead = activeTier.CacheRead
+			effectiveMP.CacheCreate = activeTier.CacheCreate
+			effectiveMP.CacheCreate1h = activeTier.CacheCreate1h
 		}
 	}
 
-	if cacheCreate1h > cacheCreate {
-		cacheCreate1h = cacheCreate
-	}
 	cacheCreate5m := cacheCreate - cacheCreate1h
 	cost := perMillion(in, effectiveMP.Input) +
 		perMillion(out, effectiveMP.Output) +
@@ -598,16 +601,6 @@ func (c *Calculator) CostForEvent(model string, in, out, cacheRead, cacheCreate,
 		perMillion(cacheCreate5m, effectiveMP.CacheCreate) +
 		perMillion(cacheCreate1h, cacheCreate1hRate(effectiveMP))
 	return &cost
-}
-
-// CostForAt is an alias for CostForEvent.
-func (c *Calculator) CostForAt(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64, ts time.Time) *float64 {
-	return c.CostForEvent(model, in, out, cacheRead, cacheCreate, cacheCreate1h, ts)
-}
-
-// CostForCacheTTLAt is an alias for CostForEvent.
-func (c *Calculator) CostForCacheTTLAt(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64, ts time.Time) *float64 {
-	return c.CostForEvent(model, in, out, cacheRead, cacheCreate, cacheCreate1h, ts)
 }
 
 // cacheCreate1hRate returns the 1-hour-TTL cache-write rate. Anthropic prices
