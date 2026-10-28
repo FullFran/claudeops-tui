@@ -307,20 +307,21 @@ func isPermanentReject(r source.Record) bool {
 
 func (c *Collector) persistAssistant(ctx context.Context, e parser.AssistantEvent) bool {
 	se := store.Event{
-		UUID:              e.DedupUUID(),
-		SessionID:         e.Session,
-		CWD:               e.CWD,
-		Type:              "assistant",
-		Model:             e.Model,
-		TS:                e.TS,
-		InTokens:          e.InTokens,
-		OutTokens:         e.OutTokens,
-		CacheReadTokens:   e.CacheReadTokens,
-		CacheCreateTokens: e.CacheCreateTokens,
+		UUID:                e.DedupUUID(),
+		SessionID:           e.Session,
+		CWD:                 e.CWD,
+		Type:                "assistant",
+		Model:               e.Model,
+		TS:                  e.TS,
+		InTokens:            e.InTokens,
+		OutTokens:           e.OutTokens,
+		CacheReadTokens:     e.CacheReadTokens,
+		CacheCreateTokens:   e.CacheCreateTokens,
+		CacheCreate1hTokens: e.CacheCreate1hTokens,
 	}
 	var cost *float64
 	if c.calc != nil {
-		cost = c.calc.CostFor(e.Model, e.InTokens, e.OutTokens, e.CacheReadTokens, e.CacheCreateTokens)
+		cost = c.calc.CostForEvent(e.Model, e.InTokens, e.OutTokens, e.CacheReadTokens, e.CacheCreateTokens, e.CacheCreate1hTokens, e.TS)
 	}
 	taskID := c.tasks.Resolve(e.Session, e.TS)
 	return c.insert(ctx, se, cost, taskID)

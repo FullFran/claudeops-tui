@@ -81,11 +81,12 @@ func (ss *StoreSink) Emit(ctx context.Context, r Record) error {
 		Source:              string(r.Source),
 	}
 
-	// CostForCacheTTL, not CostFor: a 1h cache write bills at roughly 1.6x the
-	// 5m rate, so flattening the split undercosts every long-TTL write.
+	// CostForEvent, not CostFor: passes the event timestamp for scheduled rates,
+	// and preserves the 1h cache-write split which Anthropic bills at roughly
+	// 1.6x the 5m rate.
 	var cost *float64
 	if ss.calc != nil && r.Model != "" {
-		cost = ss.calc.CostForCacheTTL(r.Model, r.In, r.Out, r.CacheRead, r.CacheCreate, r.CacheCreate1h)
+		cost = ss.calc.CostForEvent(r.Model, r.In, r.Out, r.CacheRead, r.CacheCreate, r.CacheCreate1h, r.TS)
 	}
 	if billed := billedCostEUR(r); billed != nil {
 		cost = billed

@@ -288,4 +288,73 @@ func TestStoreSinkReportedCost(t *testing.T) {
 			t.Errorf("want %v EUR, got %v", want, *got)
 		}
 	})
+
+	t.Run("timestamp-aware pricing uses record event timestamp", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := store.Open(filepath.Join(dir, "test.db"))
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+
+		tbl := &pricing.Table{
+			Updated:  "2026-10-28",
+			Currency: "EUR",
+			Models: map[string]pricing.ModelPrice{
+				"gemini-4-argon": {
+					Input:     1.84,
+					Output:    9.20,
+					CacheRead: 0.092,
+					Schedule: []pricing.PriceSchedule{
+						{
+							EffectiveDate: "2026-12-01",
+							Input:         3.68,
+							Output:        18.40,
+							CacheRead:     0.184,
+						},
+					},
+				},
+			},
+		}
+		calc := pricing.NewCalculator(tbl)
+		sink := source.NewStoreSink(s, calc)
+
+		// Record before cutoff: 2026-11-20
+		rBefore := source.Record{
+			Source:    source.Claude,
+			UUID:      "ts-before",
+			SessionID: "s1",
+			CWD:       "/p/ts",
+			Type:      "assistant",
+			Model:     "gemini-4-argon",
+			TS:        time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC),
+			In:        1000000,
+		}
+		if err := sink.Emit(ctx, rBefore); err != nil {
+			t.Fatalf("Emit rBefore: %v", err)
+		}
+		gotBefore := costOf(t, s, "ts-before")
+		if gotBefore == nil || *gotBefore != 1.84 {
+			t.Errorf("rBefore cost = %v, want 1.84", gotBefore)
+		}
+
+		// Record after cutoff: 2026-12-05
+		rAfter := source.Record{
+			Source:    source.Claude,
+			UUID:      "ts-after",
+			SessionID: "s1",
+			CWD:       "/p/ts",
+			Type:      "assistant",
+			Model:     "gemini-4-argon",
+			TS:        time.Date(2026, 12, 5, 10, 0, 0, 0, time.UTC),
+			In:        1000000,
+		}
+		if err := sink.Emit(ctx, rAfter); err != nil {
+			t.Fatalf("Emit rAfter: %v", err)
+		}
+		gotAfter := costOf(t, s, "ts-after")
+		if gotAfter == nil || *gotAfter != 3.68 {
+			t.Errorf("rAfter cost = %v, want 3.68", gotAfter)
+		}
+	})
 }

@@ -214,7 +214,7 @@ func TestSeedIncludesCurrentAnthropicLineup(t *testing.T) {
 			if !ok {
 				t.Fatalf("seed missing model %q", tc.model)
 			}
-			if got != tc.want {
+			if !got.Equal(tc.want) {
 				t.Errorf("seed price for %q = %+v, want %+v", tc.model, got, tc.want)
 			}
 		})
