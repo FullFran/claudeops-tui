@@ -9,9 +9,9 @@
 # Currency: EUR.  Adjust if you want USD — the calculator does not convert.
 # EUR figures are USD list price x 0.92.
 #
-# updated: 2026-09-26
+# updated: 2026-10-28
 
-updated = "2026-09-26"
+updated = "2026-10-28"
 currency = "EUR"
 
 # Fable 5 tier: $10 in / $50 out / $0.25-$1.00 cache-read / $12.50 cache-write(5m).
@@ -130,6 +130,31 @@ cache_create  =  1.15
 # opencode's "openai/gpt-5" -> "gpt-5") before lookup.
 # ---------------------------------------------------------------------------
 
+# Claude Sonnet 5.5: $2 in / $10 out / $0.10 cache-read / $2.50 cache-write(5m) / $4 cache-write(1h).
+[models."claude-sonnet-5-5"]
+input         =  1.84
+output        =  9.20
+cache_read    =  0.092
+cache_create  =  2.30
+cache_create_1h = 3.68
+
+# Claude Haiku 5.5: <=100k total prompt: $0.10 in / $0.50 out / $0.01 cache-read / $0.125 cache-write / $0.20 cache-write(1h).
+# >100k total prompt: $0.50 in / $2.50 out / $0.05 cache-read / $0.625 cache-write / $1.00 cache-write(1h).
+[models."claude-haiku-5-5"]
+input         =  0.092
+output        =  0.46
+cache_read    =  0.0092
+cache_create  =  0.115
+cache_create_1h = 0.184
+
+[[models."claude-haiku-5-5".tiers]]
+threshold     = 100000
+input         =  0.46
+output        =  2.30
+cache_read    =  0.046
+cache_create  =  0.575
+cache_create_1h = 0.92
+
 # Claude Sonnet 5: $2 in / $10 out / $0.20 cache-read / $2.50 cache-write.
 [models."claude-sonnet-5"]
 input         =  1.84
@@ -137,26 +162,76 @@ output        =  9.20
 cache_read    =  0.184
 cache_create  =  2.30
 
+# OpenAI GPT-6.1 family:
+# Sol: <=272k: $2 in / $10 out / $0.10 cache-read; >272k: $4 in / $15 out / $0.20 cache-read.
+[models."gpt-6.1-sol"]
+input         =  1.84
+output        =  9.20
+cache_read    =  0.092
+cache_create  =  0.00
+
+[[models."gpt-6.1-sol".tiers]]
+threshold     = 272000
+input         =  3.68
+output        = 13.80
+cache_read    =  0.184
+cache_create  =  0.00
+
+# Terra: <=272k: $1 in / $5 out / $0.05 cache-read; >272k: $2 in / $7.50 out / $0.10 cache-read.
+[models."gpt-6.1-terra"]
+input         =  0.92
+output        =  4.60
+cache_read    =  0.046
+cache_create  =  0.00
+
+[[models."gpt-6.1-terra".tiers]]
+threshold     = 272000
+input         =  1.84
+output        =  6.90
+cache_read    =  0.092
+cache_create  =  0.00
+
 # OpenAI GPT-6 family:
-# Astra: $10 in / $50 out / $1.00 cache-read / $12.50 cache-write.
+# Astra: <=272k: $10 in / $50 out / $1.00 cache-read / $12.50 cache-write; >272k: $20 in / $75 out / $2.00 cache-read.
 [models."gpt-6-astra"]
 input         =  9.20
 output        = 46.00
 cache_read    =  0.92
 cache_create  = 11.50
 
-# Sol: $2 in / $10 out / $0.20 cache-read / $2.50 cache-write.
+[[models."gpt-6-astra".tiers]]
+threshold     = 272000
+input         = 18.40
+output        = 69.00
+cache_read    =  1.84
+cache_create  = 11.50
+
+# Sol: <=272k: $2 in / $10 out / $0.20 cache-read / $2.50 cache-write; >272k: $4 in / $15 out / $0.40 cache-read.
 [models."gpt-6-sol"]
 input         =  1.84
 output        =  9.20
 cache_read    =  0.184
 cache_create  =  2.30
 
-# Luna: $0.10 in / $0.50 out / $0.01 cache-read / $0.125 cache-write.
+[[models."gpt-6-sol".tiers]]
+threshold     = 272000
+input         =  3.68
+output        = 13.80
+cache_read    =  0.368
+cache_create  =  2.30
+
+# Luna: <=272k: $0.10 in / $0.50 out / $0.01 cache-read / $0.125 cache-write; >272k: $0.20 in / $0.75 out / $0.02 cache-read.
 [models."gpt-6-luna"]
 input         =  0.092
 output        =  0.46
 cache_read    =  0.0092
+cache_create  =  0.115
+
+[[models."gpt-6-luna".tiers]]
+threshold     = 272000
+input         =  0.184
+output        =  0.69
+cache_read    =  0.0184
 cache_create  =  0.115
 
 # OpenAI GPT-5 family (and Codex variants): $1.25 in / $10 out / $0.125 cached.
@@ -215,11 +290,34 @@ output        =  4.048
 cache_read    =  0.253
 cache_create  =  0.00
 
+# Google Gemini 4 family:
+# Argon: before 2026-12-01: $2 in / $10 out / $0.10 cache-read; thereafter: $4 in / $20 out / $0.20 cache-read.
+[models."gemini-4-argon"]
+input         =  1.84
+output        =  9.20
+cache_read    =  0.092
+cache_create  =  0.00
+
+[[models."gemini-4-argon".schedule]]
+effective_date = "2026-12-01"
+input         =  3.68
+output        = 18.40
+cache_read    =  0.184
+cache_create  =  0.00
+
 # Google Gemini 3 family.
+# Flash: before 2027-01-01: $0.75 in / $3.75 out / $0.075 cache-read; thereafter: $1.50 in / $7.50 out / $0.15 cache-read.
 [models."gemini-3.8-flash"]
 input         =  0.69
 output        =  3.45
 cache_read    =  0.069
+cache_create  =  0.00
+
+[[models."gemini-3.8-flash".schedule]]
+effective_date = "2027-01-01"
+input         =  1.38
+output        =  6.90
+cache_read    =  0.138
 cache_create  =  0.00
 
 [models."gemini-3.7-flash"]

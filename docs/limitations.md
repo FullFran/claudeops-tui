@@ -77,6 +77,20 @@ a one-time warning in the status line rather than guessing a price. Edit the
 TOML to refresh, or run `make update-pricing` in a checkout to refresh the
 embedded LiteLLM snapshot.
 
+### Codex cache writes and service modes are unbilled estimates
+
+Codex rollout records do not report cache-write token breakdowns or service modes:
+- **Cache writes (30m / 12h TTLs)**: OpenAI's 30-minute and 12-hour cache-write TTLs
+  are distinct from Claude's 5-minute and 1-hour TTLs and are absent from Codex
+  event logs. ClaudeOps does not invent cache-write charges or conflate provider
+  TTL models.
+- **Service modes**: Alternate service modes (e.g. priority, flex, or dedicated
+  throughput) are not recorded in the event stream. ClaudeOps calculates standard-rate
+  estimates rather than claiming exact billed cost.
+- **Context thresholds**: Context tiers are evaluated whole-request against
+  observed prompt tokens (for OpenAI/Codex, input plus cache reads; for Haiku,
+  input, cache reads, and cache writes with the 1h subset counted once).
+
 ### Shared credentials file
 
 `~/.claude/.credentials.json` is owned by Claude Code. ClaudeOps reads it always
