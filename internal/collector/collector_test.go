@@ -131,3 +131,69 @@ func TestWarmStartReadsOnlyNewBytes(t *testing.T) {
 		t.Errorf("agg: want 2 got %d", agg.Events)
 	}
 }
+
+func TestCollector_PreservesCacheCreate1hAndEventTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "projects")
+	_ = os.MkdirAll(root, 0o755)
+	dbPath := filepath.Join(dir, "test.db")
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	tbl := &pricing.Table{
+		Updated:  "2026-10-28",
+		Currency: "EUR",
+		Models: map[string]pricing.ModelPrice{
+			"gemini-4-argon": {
+				Input:     1.84,
+				Output:    9.20,
+				CacheRead: 0.092,
+				Schedule: []pricing.PriceSchedule{
+					{
+						EffectiveDate: "2026-12-01",
+						Input:         3.68,
+						Output:        18.40,
+						CacheRead:     0.184,
+					},
+				},
+			},
+		},
+	}
+	calc := pricing.NewCalculator(tbl)
+	c := New(root, s, calc, nil)
+
+	// JSON line with 1h cache writes and timestamp after effective date (2026-12-05)
+	line := `{"type":"assistant","uuid":"u-ttl","sessionId":"s1","cwd":"/p","timestamp":"2026-12-05T10:00:00Z","message":{"role":"assistant","model":"gemini-4-argon","usage":{"input_tokens":1000000,"cache_creation_input_tokens":20000,"cache_creation":{"ephemeral_1h_input_tokens":15000}}}}
+`
+	writeJSONL(t, root, "-tmp-proj", "ttl.jsonl", line)
+	if err := c.IngestExisting(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		c1h  int64
+		cost *float64
+	)
+	err = s.DB().QueryRow(`SELECT cache_create_1h_tokens, cost_eur FROM events WHERE uuid='u-ttl'`).Scan(&c1h, &cost)
+	if err != nil {
+		t.Fatalf("QueryRow: %v", err)
+	}
+
+	if c1h != 15000 {
+		t.Errorf("cache_create_1h_tokens = %d, want 15000 (TTL metadata was dropped)", c1h)
+	}
+	// Expected cost: 1M input tokens at thereafter rate 3.68
+	// plus 15,000 1h cache tokens priced at input x 2 (7.36 / 1M) = 0.1104.
+	// Total: 3.7904.
+	wantCost := 3.7904
+	if cost == nil || *cost != wantCost {
+		if cost == nil {
+			t.Errorf("cost_eur = nil, want %v", wantCost)
+		} else {
+			t.Errorf("cost_eur = %v, want %v", *cost, wantCost)
+		}
+	}
+}

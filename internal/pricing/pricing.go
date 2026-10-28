@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -70,12 +72,62 @@ func litellmFallback() map[string]ModelPrice {
 // CacheCreate is the 5-minute-TTL cache-write rate; CacheCreate1h is the
 // 1-hour-TTL one and is optional — when absent it derives from Input (see
 // cacheCreate1hRate).
+// Tiers and Schedule are optional extensions for context-dependent and
+// date-scheduled pricing.
 type ModelPrice struct {
+	Input         float64         `toml:"input"`
+	Output        float64         `toml:"output"`
+	CacheRead     float64         `toml:"cache_read"`
+	CacheCreate   float64         `toml:"cache_create"`
+	CacheCreate1h float64         `toml:"cache_create_1h,omitempty"`
+	Tiers         []PriceTier     `toml:"tiers,omitempty"`
+	Schedule      []PriceSchedule `toml:"schedule,omitempty"`
+}
+
+// PriceTier defines an optional pricing tier when prompt context exceeds
+// Threshold tokens.
+type PriceTier struct {
+	Threshold     int64   `toml:"threshold"`
+	EffectiveDate string  `toml:"effective_date,omitempty"`
 	Input         float64 `toml:"input"`
 	Output        float64 `toml:"output"`
 	CacheRead     float64 `toml:"cache_read"`
 	CacheCreate   float64 `toml:"cache_create"`
-	CacheCreate1h float64 `toml:"cache_create_1h"`
+	CacheCreate1h float64 `toml:"cache_create_1h,omitempty"`
+}
+
+// PriceSchedule defines an optional scheduled rate effective at and after
+// a UTC date/timestamp.
+type PriceSchedule struct {
+	EffectiveDate string  `toml:"effective_date"`
+	Input         float64 `toml:"input"`
+	Output        float64 `toml:"output"`
+	CacheRead     float64 `toml:"cache_read"`
+	CacheCreate   float64 `toml:"cache_create"`
+	CacheCreate1h float64 `toml:"cache_create_1h,omitempty"`
+}
+
+// Equal reports whether two ModelPrices have identical rates, tiers, and schedules.
+func (mp ModelPrice) Equal(other ModelPrice) bool {
+	if mp.Input != other.Input || mp.Output != other.Output ||
+		mp.CacheRead != other.CacheRead || mp.CacheCreate != other.CacheCreate ||
+		mp.CacheCreate1h != other.CacheCreate1h {
+		return false
+	}
+	if len(mp.Tiers) != len(other.Tiers) || len(mp.Schedule) != len(other.Schedule) {
+		return false
+	}
+	for i := range mp.Tiers {
+		if mp.Tiers[i] != other.Tiers[i] {
+			return false
+		}
+	}
+	for i := range mp.Schedule {
+		if mp.Schedule[i] != other.Schedule[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Table is the parsed pricing.toml.
@@ -113,16 +165,62 @@ func LoadOrSeed(path string) (*Table, error) {
 		return nil, err
 	}
 	merged, changed := mergeMissingModels(current, seed)
+	enriched := enrichUntouchedSeedModels(merged, seed)
 	corrected := correctStalePrices(merged, seed)
-	if corrected && seed.Updated != "" {
+	if (enriched || corrected) && seed.Updated != "" {
 		merged.Updated = seed.Updated
 	}
-	if changed || corrected {
+	if changed || enriched || corrected {
+		if err := merged.Validate(); err != nil {
+			return nil, err
+		}
 		if err := os.WriteFile(path, encodeTable(merged), 0o644); err != nil {
 			return nil, err
 		}
 	}
 	return merged, nil
+}
+
+// exactOldSeedModels lists model prices from previous seeds that were flat.
+// We enrich them with tiers and schedules only if the local file has the EXACT
+// old seed values and no custom tiers/schedules.
+var exactOldSeedModels = map[string]ModelPrice{
+	"gpt-6-astra":      {Input: 9.20, Output: 46.00, CacheRead: 0.92, CacheCreate: 11.50},
+	"gpt-6-sol":        {Input: 1.84, Output: 9.20, CacheRead: 0.184, CacheCreate: 2.30},
+	"gpt-6-luna":       {Input: 0.092, Output: 0.46, CacheRead: 0.0092, CacheCreate: 0.115},
+	"gemini-3.8-flash": {Input: 0.69, Output: 3.45, CacheRead: 0.069, CacheCreate: 0.00},
+}
+
+// enrichUntouchedSeedModels adds new tiers/schedules to models that still match
+// the exact old seed, preserving all user-customized fields.
+func enrichUntouchedSeedModels(current, seed *Table) bool {
+	changed := false
+	for name, oldPrice := range exactOldSeedModels {
+		cur, ok := current.Models[name]
+		if !ok {
+			continue
+		}
+		if cur.Input != oldPrice.Input ||
+			cur.Output != oldPrice.Output ||
+			cur.CacheRead != oldPrice.CacheRead ||
+			cur.CacheCreate != oldPrice.CacheCreate ||
+			cur.CacheCreate1h != oldPrice.CacheCreate1h ||
+			len(cur.Tiers) > 0 ||
+			len(cur.Schedule) > 0 {
+			continue
+		}
+		seedPrice, inSeed := seed.Models[name]
+		if !inSeed {
+			continue
+		}
+		if len(seedPrice.Tiers) > 0 || len(seedPrice.Schedule) > 0 {
+			cur.Tiers = seedPrice.Tiers
+			cur.Schedule = seedPrice.Schedule
+			current.Models[name] = cur
+			changed = true
+		}
+	}
+	return changed
 }
 
 // staleSeedPrices lists per-model values we shipped incorrectly in earlier
@@ -146,7 +244,7 @@ func correctStalePrices(current, seed *Table) bool {
 	changed := false
 	for name, wrong := range staleSeedPrices {
 		cur, ok := current.Models[name]
-		if !ok || cur != wrong {
+		if !ok || !cur.Equal(wrong) {
 			continue
 		}
 		newv, ok := seed.Models[name]
@@ -159,6 +257,62 @@ func correctStalePrices(current, seed *Table) bool {
 	return changed
 }
 
+// Validate checks that all model prices, tiers, and schedules have valid non-negative
+// rates, positive thresholds, and valid date formats.
+func (t *Table) Validate() error {
+	for name, mp := range t.Models {
+		if err := validatePrice(name, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePrice(name string, mp ModelPrice) error {
+	if mp.Input < 0 || mp.Output < 0 || mp.CacheRead < 0 || mp.CacheCreate < 0 || mp.CacheCreate1h < 0 {
+		return fmt.Errorf("pricing: model %q has negative rate", name)
+	}
+	for i, tier := range mp.Tiers {
+		if tier.Threshold <= 0 {
+			return fmt.Errorf("pricing: model %q tier[%d] has non-positive threshold %d", name, i, tier.Threshold)
+		}
+		if tier.Input < 0 || tier.Output < 0 || tier.CacheRead < 0 || tier.CacheCreate < 0 || tier.CacheCreate1h < 0 {
+			return fmt.Errorf("pricing: model %q tier[%d] has negative rate", name, i)
+		}
+		if tier.EffectiveDate != "" {
+			if _, err := parseCutoffDate(tier.EffectiveDate); err != nil {
+				return fmt.Errorf("pricing: model %q tier[%d] has invalid effective_date %q: %w", name, i, tier.EffectiveDate, err)
+			}
+		}
+	}
+	for i, s := range mp.Schedule {
+		if s.EffectiveDate == "" {
+			return fmt.Errorf("pricing: model %q schedule[%d] missing effective_date", name, i)
+		}
+		if _, err := parseCutoffDate(s.EffectiveDate); err != nil {
+			return fmt.Errorf("pricing: model %q schedule[%d] has invalid effective_date %q: %w", name, i, s.EffectiveDate, err)
+		}
+		if s.Input < 0 || s.Output < 0 || s.CacheRead < 0 || s.CacheCreate < 0 || s.CacheCreate1h < 0 {
+			return fmt.Errorf("pricing: model %q schedule[%d] has negative rate", name, i)
+		}
+	}
+	return nil
+}
+
+func parseCutoffDate(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("cannot parse date %q (expected YYYY-MM-DD or RFC3339)", s)
+}
+
 func parse(b []byte) (*Table, error) {
 	var t Table
 	if err := toml.Unmarshal(b, &t); err != nil {
@@ -169,6 +323,9 @@ func parse(b []byte) (*Table, error) {
 	}
 	if t.Currency == "" {
 		t.Currency = "EUR"
+	}
+	if err := t.Validate(); err != nil {
+		return nil, err
 	}
 	return &t, nil
 }
@@ -232,6 +389,33 @@ func encodeTable(t *Table) []byte {
 		if price.CacheCreate1h > 0 {
 			fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", price.CacheCreate1h)
 		}
+		for _, tier := range price.Tiers {
+			buf.WriteString("\n")
+			fmt.Fprintf(&buf, "[[models.%q.tiers]]\n", name)
+			fmt.Fprintf(&buf, "threshold     = %d\n", tier.Threshold)
+			if tier.EffectiveDate != "" {
+				fmt.Fprintf(&buf, "effective_date = %q\n", tier.EffectiveDate)
+			}
+			fmt.Fprintf(&buf, "input         = %5.4f\n", tier.Input)
+			fmt.Fprintf(&buf, "output        = %5.4f\n", tier.Output)
+			fmt.Fprintf(&buf, "cache_read    = %5.4f\n", tier.CacheRead)
+			fmt.Fprintf(&buf, "cache_create  = %5.4f\n", tier.CacheCreate)
+			if tier.CacheCreate1h > 0 {
+				fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", tier.CacheCreate1h)
+			}
+		}
+		for _, sched := range price.Schedule {
+			buf.WriteString("\n")
+			fmt.Fprintf(&buf, "[[models.%q.schedule]]\n", name)
+			fmt.Fprintf(&buf, "effective_date = %q\n", sched.EffectiveDate)
+			fmt.Fprintf(&buf, "input         = %5.4f\n", sched.Input)
+			fmt.Fprintf(&buf, "output        = %5.4f\n", sched.Output)
+			fmt.Fprintf(&buf, "cache_read    = %5.4f\n", sched.CacheRead)
+			fmt.Fprintf(&buf, "cache_create  = %5.4f\n", sched.CacheCreate)
+			if sched.CacheCreate1h > 0 {
+				fmt.Fprintf(&buf, "cache_create_1h = %5.4f\n", sched.CacheCreate1h)
+			}
+		}
 		if i < len(models)-1 {
 			buf.WriteString("\n")
 		}
@@ -270,6 +454,15 @@ func NewCalculator(t *Table) *Calculator {
 // table can be keyed by bare model name regardless of which source emitted the
 // event. Explicitly free variants ("…-free", "…:free") cost €0 unless the
 // table carries an exact entry for them.
+// CostFor computes the EUR cost for an event with the given token classes.
+// Returns nil if the model is unknown (and triggers OnWarn once).
+//
+// Decorated model IDs — "claude-fable-5[1m]", "openai/gpt-5",
+// "google/antigravity-gemini-3-pro", "ollama/kimi-k2.5:cloud" — fall back to
+// the progressively less decorated forms ModelIDCandidates derives, so the
+// table can be keyed by bare model name regardless of which source emitted the
+// event. Explicitly free variants ("…-free", "…:free") cost €0 unless the
+// table carries an exact entry for them.
 func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64) *float64 {
 	return c.CostForCacheTTL(model, in, out, cacheRead, cacheCreate, 0)
 }
@@ -280,6 +473,14 @@ func (c *Calculator) CostFor(model string, in, out, cacheRead, cacheCreate int64
 // roughly 1.6x the 5m rate. When cacheCreate1h exceeds cacheCreate it is capped
 // at the total, so a malformed line can never bill more tokens than it reported.
 func (c *Calculator) CostForCacheTTL(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64) *float64 {
+	return c.CostForEvent(model, in, out, cacheRead, cacheCreate, cacheCreate1h, time.Time{})
+}
+
+// CostForEvent computes the EUR cost for an event with the given token classes
+// and event timestamp.
+// If ts is zero, deterministic base rates apply without date schedules.
+// Otherwise UTC date schedules and prompt context tiers are evaluated.
+func (c *Calculator) CostForEvent(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64, ts time.Time) *float64 {
 	if nonBillableModels[model] {
 		return nil
 	}
@@ -307,16 +508,106 @@ func (c *Calculator) CostForCacheTTL(model string, in, out, cacheRead, cacheCrea
 		c.mu.Unlock()
 		return nil
 	}
+
+	effectiveMP := mp
+
+	// 1. Evaluate scheduled rates when timestamp is non-zero
+	if !ts.IsZero() && len(mp.Schedule) > 0 {
+		var latestSched *PriceSchedule
+		var latestCutoff time.Time
+		utcTS := ts.UTC()
+		for _, s := range mp.Schedule {
+			cutoff, err := parseCutoffDate(s.EffectiveDate)
+			if err != nil {
+				continue
+			}
+			if !utcTS.Before(cutoff) { // utcTS >= cutoff
+				if latestSched == nil || cutoff.After(latestCutoff) {
+					sCopy := s
+					latestSched = &sCopy
+					latestCutoff = cutoff
+				}
+			}
+		}
+		if latestSched != nil {
+			if latestSched.Input > 0 {
+				effectiveMP.Input = latestSched.Input
+			}
+			if latestSched.Output > 0 {
+				effectiveMP.Output = latestSched.Output
+			}
+			if latestSched.CacheRead > 0 {
+				effectiveMP.CacheRead = latestSched.CacheRead
+			}
+			if latestSched.CacheCreate > 0 {
+				effectiveMP.CacheCreate = latestSched.CacheCreate
+			}
+			if latestSched.CacheCreate1h > 0 {
+				effectiveMP.CacheCreate1h = latestSched.CacheCreate1h
+			}
+		}
+	}
+
+	// 2. Evaluate context tiers (prompt context threshold)
+	if len(mp.Tiers) > 0 {
+		actualCacheCreate := cacheCreate
+		if cacheCreate1h > actualCacheCreate {
+			actualCacheCreate = cacheCreate1h
+		}
+		isHaiku := strings.Contains(NormalizeModelID(model), "haiku") || strings.Contains(strings.ToLower(model), "haiku")
+		promptTokens := in + cacheRead
+		if isHaiku {
+			promptTokens += actualCacheCreate
+		}
+
+		var activeTier *PriceTier
+		for _, tier := range mp.Tiers {
+			if promptTokens > tier.Threshold {
+				if activeTier == nil || tier.Threshold > activeTier.Threshold {
+					tCopy := tier
+					activeTier = &tCopy
+				}
+			}
+		}
+		if activeTier != nil {
+			if activeTier.Input > 0 {
+				effectiveMP.Input = activeTier.Input
+			}
+			if activeTier.Output > 0 {
+				effectiveMP.Output = activeTier.Output
+			}
+			if activeTier.CacheRead > 0 {
+				effectiveMP.CacheRead = activeTier.CacheRead
+			}
+			if activeTier.CacheCreate > 0 {
+				effectiveMP.CacheCreate = activeTier.CacheCreate
+			}
+			if activeTier.CacheCreate1h > 0 {
+				effectiveMP.CacheCreate1h = activeTier.CacheCreate1h
+			}
+		}
+	}
+
 	if cacheCreate1h > cacheCreate {
 		cacheCreate1h = cacheCreate
 	}
 	cacheCreate5m := cacheCreate - cacheCreate1h
-	cost := perMillion(in, mp.Input) +
-		perMillion(out, mp.Output) +
-		perMillion(cacheRead, mp.CacheRead) +
-		perMillion(cacheCreate5m, mp.CacheCreate) +
-		perMillion(cacheCreate1h, cacheCreate1hRate(mp))
+	cost := perMillion(in, effectiveMP.Input) +
+		perMillion(out, effectiveMP.Output) +
+		perMillion(cacheRead, effectiveMP.CacheRead) +
+		perMillion(cacheCreate5m, effectiveMP.CacheCreate) +
+		perMillion(cacheCreate1h, cacheCreate1hRate(effectiveMP))
 	return &cost
+}
+
+// CostForAt is an alias for CostForEvent.
+func (c *Calculator) CostForAt(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64, ts time.Time) *float64 {
+	return c.CostForEvent(model, in, out, cacheRead, cacheCreate, cacheCreate1h, ts)
+}
+
+// CostForCacheTTLAt is an alias for CostForEvent.
+func (c *Calculator) CostForCacheTTLAt(model string, in, out, cacheRead, cacheCreate, cacheCreate1h int64, ts time.Time) *float64 {
+	return c.CostForEvent(model, in, out, cacheRead, cacheCreate, cacheCreate1h, ts)
 }
 
 // cacheCreate1hRate returns the 1-hour-TTL cache-write rate. Anthropic prices
