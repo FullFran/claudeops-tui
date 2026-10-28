@@ -4,6 +4,22 @@ Behavior changes that need action from you, newest first. Everything not listed
 here is backward compatible: config keys fall back to defaults and the store
 migrates itself on open.
 
+## October 2026 Model Catalog & Pricing Update
+
+The pricing engine now supports context-dependent tiers and scheduled rate cutoffs:
+
+- **Claude 5.5 models**: Added `claude-sonnet-5-5` (with explicit 1h cache-write rate €3.68) and `claude-haiku-5-5` with whole-request tiered pricing (base rates up to 100,000 prompt tokens; higher tier above 100,000 tokens).
+- **GPT-6 & 6.1 models**: Standard short (≤272,000 prompt tokens) and long (>272,000 prompt tokens) context tiers for `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, and `gpt-6.1-terra`.
+- **Scheduled transitions**: `gemini-4-argon` (effective 2026-12-01 UTC) and `gemini-3.8-flash` (effective 2027-01-01 UTC) automatically switch from promotional base rates to standard rates based on the event timestamp.
+
+### Backward compatibility & customizations
+
+Existing `pricing.toml` files preserve all user customizations:
+- Only untouched models matching the exact old seed entries are enriched with the new tier and schedule metadata.
+- If you customized any price for an existing model, your custom rates and configurations remain untouched.
+- Malformed or invalid configurations (such as unparseable dates or negative thresholds) are rejected during validation without altering your existing pricing file.
+- Historical stored costs in your database are unchanged; no re-ingestion is required.
+
 ## `CODEX_HOME` now means the Codex home directory
 
 `CodexRoot()` used to return `$CODEX_HOME` verbatim as the rollouts root, which
