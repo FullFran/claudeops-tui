@@ -35,6 +35,7 @@ type Settings struct {
 	Statusline  StatuslineSettings  `toml:"statusline"`
 	Insights    InsightsSettings    `toml:"insights"`
 	Export      ExportSettings      `toml:"export"`
+	Update      UpdateSettings      `toml:"update"`
 	// Sources is the per-source ingestion config. When absent (nil or empty),
 	// SourceConfigs() returns the default (claude only, enabled).
 	Sources []SourceConfig `toml:"sources"`
@@ -184,6 +185,22 @@ type KeybindingsSettings struct {
 	CommandPalette string `toml:"command_palette"`
 }
 
+// UpdateSettings controls update checks and auto-updates.
+type UpdateSettings struct {
+	// Check toggles the non-blocking background check for newer releases on launch.
+	// Defaults to true when absent (opt-out).
+	Check *bool `toml:"check"`
+
+	// Auto enables automatic installation of updates when a newer release is found.
+	// Defaults to false (explicit opt-in).
+	Auto bool `toml:"auto"`
+}
+
+// IsCheckEnabled reports whether update checking on launch is enabled.
+func (u UpdateSettings) IsCheckEnabled() bool {
+	return u.Check == nil || *u.Check
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 // DefaultSettings returns a Settings struct with all widgets enabled and
@@ -252,6 +269,10 @@ func DefaultSettings() Settings {
 		},
 		Export: ExportSettings{
 			Headers: map[string]string{},
+		},
+		Update: UpdateSettings{
+			Check: boolPtr(true),
+			Auto:  false,
 		},
 	}
 }

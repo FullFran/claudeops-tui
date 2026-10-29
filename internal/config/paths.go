@@ -30,6 +30,9 @@ type Paths struct {
 	// written by `claudeops agy statusline` from agy's own status-line
 	// payload and read back by provider.Antigravity. Owned by internal/agy.
 	AntigravityQuotaPath string // ~/.claudeops/antigravity-quota.json
+	// UpdateCachePath caches the latest update check result to avoid querying
+	// release endpoints on every launch.
+	UpdateCachePath string // ~/.claudeops/update-cache.json
 }
 
 // Default builds Paths from the user's HOME (or HOME override for tests).
@@ -60,6 +63,7 @@ func ForHome(home string) Paths {
 		SnapshotCachePath:    filepath.Join(data, "snapshot-cache.json"),
 		UsageCachePath:       filepath.Join(data, "usage-cache.json"),
 		AntigravityQuotaPath: filepath.Join(data, "antigravity-quota.json"),
+		UpdateCachePath:      filepath.Join(data, "update-cache.json"),
 	}
 }
 

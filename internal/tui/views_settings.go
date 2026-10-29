@@ -187,6 +187,20 @@ func settingsItems() []settingsItem {
 			actionKey: "push_now"},
 		{label: "Apply OTel config", desc: "write env vars to ~/.claude/settings.json",
 			actionKey: "apply_otel"},
+
+		// ── Updates ──────────────────────────────────────────────────────────
+		{section: true, label: "Updates"},
+		{label: "Check on launch", desc: "check for newer releases in background",
+			get:    func(s config.Settings) bool { return s.Update.IsCheckEnabled() },
+			toggle: func(s *config.Settings) {
+				val := !s.Update.IsCheckEnabled()
+				s.Update.Check = &val
+			}},
+		{label: "Auto-install", desc: "automatically install updates when available",
+			get:    func(s config.Settings) bool { return s.Update.Auto },
+			toggle: func(s *config.Settings) { s.Update.Auto = !s.Update.Auto }},
+		{label: "Check now", desc: "query release index for updates",
+			actionKey: "check_update_now"},
 	}
 }
 

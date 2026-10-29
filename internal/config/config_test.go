@@ -359,3 +359,36 @@ opencode = "claude"
 		t.Errorf(`Agents["agy"] = %q, want the untouched default "antigravity"`, got)
 	}
 }
+
+func TestUpdateSettingsDefaults(t *testing.T) {
+	s := DefaultSettings()
+	if !s.Update.IsCheckEnabled() {
+		t.Errorf("expected update.check to default to true")
+	}
+	if s.Update.Auto {
+		t.Errorf("expected update.auto to default to false")
+	}
+}
+
+func TestUpdateSettingsLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[update]
+check = false
+auto = true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Update.IsCheckEnabled() {
+		t.Errorf("expected update.check to be false, got true")
+	}
+	if !s.Update.Auto {
+		t.Errorf("expected update.auto to be true, got false")
+	}
+}
+

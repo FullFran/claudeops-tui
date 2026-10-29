@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fullfran/claudeops-tui/internal/buildinfo"
+	"github.com/fullfran/claudeops-tui/internal/config"
 	selfupdate "github.com/fullfran/claudeops-tui/internal/update"
 )
 
@@ -31,6 +32,7 @@ func cmdUpdate(args []string) error {
 		if err != nil {
 			return err
 		}
+		saveUpdateDecisionCache(decision)
 		if decision.ExecutablePath != "" {
 			fmt.Printf("installed at: %s\n", decision.ExecutablePath)
 		}
@@ -67,6 +69,7 @@ func cmdUpdate(args []string) error {
 	}
 
 	if err == nil {
+		saveUpdateDecisionCache(decision)
 		// UpToDate is decided before installing now, so this costs nothing.
 		if decision.UpToDate || (decision.InstalledNow != "" && decision.InstalledNow == "claudeops "+version) {
 			fmt.Println("already up to date")
@@ -136,4 +139,26 @@ func updateMethodLabel(m selfupdate.Method) string {
 		return "replace this binary with the published release archive"
 	}
 	return "go install (this binary is managed by the Go toolchain)"
+}
+
+func saveUpdateDecisionCache(decision selfupdate.Decision) {
+	paths, err := config.Default()
+	if err != nil {
+		return
+	}
+	cur := version
+	if decision.InstalledNow != "" {
+		cur = decision.InstalledNow
+	}
+	_ = selfupdate.WriteCache(paths.UpdateCachePath, selfupdate.CheckResult{
+		CheckedAt:      time.Now(),
+		CurrentVersion: cur,
+		LatestVersion:  decision.LatestVersion,
+		UpToDate:       decision.UpToDate,
+		Downgrade:      decision.Downgrade,
+		CanAuto:        decision.CanAuto,
+		Method:         decision.Method,
+		InstallCommand: decision.InstallCommand,
+		Reason:         decision.Reason,
+	})
 }
