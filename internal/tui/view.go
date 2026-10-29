@@ -40,7 +40,11 @@ func (m Model) View() string {
 	// Title + tab bar, separated from the body by a full-width rule so the
 	// chrome reads as one header block.
 	brand := titleStyle.Render("◆ claudeops")
-	head := brand + " " + dimStyle.Render(m.Version) + "\n" +
+	verStr := dimStyle.Render(m.Version)
+	if m.UpdateAvailable != "" {
+		verStr += "  " + warnStyle.Render("↑ "+m.UpdateAvailable+" available ('claudeops update')")
+	}
+	head := brand + " " + verStr + "\n" +
 		renderTabBar(m.activeTab, visibleTabs(m.Settings)) + "\n" +
 		dimStyle.Render(ruleLine(m.width))
 

@@ -490,6 +490,7 @@ func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model 
 	model.ConfigPath = p.ConfigPath
 	model.ProjectsRoot = p.ClaudeProjects
 	model.LiveDir = p.LiveDir
+	model.UpdateCachePath = p.UpdateCachePath
 	// Additional live-quota providers beyond the bespoke Anthropic block.
 	// Each is skipped silently when its credentials are absent.
 	model.Providers = provider.NewRegistry(

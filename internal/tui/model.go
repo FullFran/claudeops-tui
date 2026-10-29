@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/fullfran/claudeops-tui/internal/buildinfo"
 	"github.com/fullfran/claudeops-tui/internal/config"
 	"github.com/fullfran/claudeops-tui/internal/export"
 	"github.com/fullfran/claudeops-tui/internal/insights"
@@ -22,6 +23,7 @@ import (
 	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/store"
 	"github.com/fullfran/claudeops-tui/internal/tasks"
+	"github.com/fullfran/claudeops-tui/internal/update"
 	"github.com/fullfran/claudeops-tui/internal/usage"
 )
 
@@ -39,6 +41,9 @@ type Model struct {
 	Version        string
 	ProjectsRoot   string // ~/.claude/projects — scanned for live sessions
 	LiveDir        string // ~/.claudeops/live — hook-written session sidecars
+	UpdateCachePath string // ~/.claudeops/update-cache.json
+	UpdateAvailable string // newer version available (e.g. "0.17.0"), empty if none
+	UpdateStatus    string // summary of update status for settings/status
 
 	// snapshot
 	Today                store.Aggregates
@@ -184,12 +189,61 @@ func NewWithSettings(s *store.Store, u *usage.Client, tr *tasks.Tracker, setting
 	}
 }
 
-// Init kicks off the first refresh and tick.
+// Init kicks off the first refresh and tick, plus a background update check.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(refreshCmd(m), tickCmd())
+	cmds := []tea.Cmd{refreshCmd(m), tickCmd()}
+	if m.Settings.Update.IsCheckEnabled() {
+		cmds = append(cmds, m.checkUpdateCmd(false))
+	}
+	return tea.Batch(cmds...)
 }
 
 type tickMsg struct{}
+
+// updateCheckMsg carries the result of an update check.
+type updateCheckMsg struct {
+	result  update.CheckResult
+	autoRan bool
+	autoErr error
+	manual  bool
+}
+
+func (m Model) checkUpdateCmd(manual bool) tea.Cmd {
+	version := m.Version
+	cachePath := m.UpdateCachePath
+	autoInstall := m.Settings.Update.Auto && !manual
+	ttl := update.DefaultCacheTTL
+	if manual {
+		ttl = 0
+	}
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		updater := update.New(version)
+		updater.SourceBuild = buildinfo.FromSource()
+
+		res, err := update.CheckWithCache(ctx, updater, cachePath, ttl)
+		if err != nil {
+			return updateCheckMsg{result: res, manual: manual}
+		}
+
+		if res.HasUpdate() && autoInstall && res.CanAuto {
+			updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer updateCancel()
+			dec, updateErr := updater.Update(updateCtx)
+			if updateErr == nil {
+				res.CurrentVersion = dec.InstalledNow
+				res.UpToDate = true
+				_ = update.WriteCache(cachePath, res)
+			}
+			return updateCheckMsg{result: res, autoRan: true, autoErr: updateErr, manual: manual}
+		}
+
+		return updateCheckMsg{result: res, manual: manual}
+	}
+}
 
 // taskActionMsg is the result of a Start/Stop call from the input modal.
 type taskActionMsg struct {
@@ -599,6 +653,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						m.setStatus("applying OTel config…")
 						return m, m.applyOTelCmd()
+					case item.actionKey == "check_update_now":
+						m.setStatus("checking for updates…")
+						return m, m.checkUpdateCmd(true)
 					}
 				}
 			} else if m.activeTab == TabDashboard && len(m.Daily) > 0 {
@@ -684,6 +741,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("otel-config failed: " + msg.err.Error())
 		} else {
 			m.setStatus("OTel config written to ~/.claude/settings.json")
+		}
+		m.refreshViewport()
+	case updateCheckMsg:
+		if msg.autoRan {
+			if msg.autoErr == nil {
+				m.setStatus(fmt.Sprintf("updated to %s (restart claudeops)", msg.result.LatestVersion))
+				m.UpdateAvailable = ""
+				m.UpdateStatus = fmt.Sprintf("updated to %s (restart claudeops)", msg.result.LatestVersion)
+			} else {
+				m.setStatus(fmt.Sprintf("auto-update failed: %v", msg.autoErr))
+				m.UpdateStatus = fmt.Sprintf("auto-update failed: %v", msg.autoErr)
+			}
+			m.refreshViewport()
+			return m, nil
+		}
+		if msg.result.HasUpdate() {
+			m.UpdateAvailable = msg.result.LatestVersion
+			m.UpdateStatus = fmt.Sprintf("update available: %s", msg.result.LatestVersion)
+			if msg.manual {
+				m.setStatus(fmt.Sprintf("update available: %s (run `claudeops update`)", msg.result.LatestVersion))
+			}
+		} else if msg.result.UpToDate {
+			m.UpdateAvailable = ""
+			m.UpdateStatus = "up to date"
+			if msg.manual {
+				m.setStatus("already up to date")
+			}
+		} else if msg.result.Downgrade {
+			m.UpdateAvailable = ""
+			m.UpdateStatus = fmt.Sprintf("ahead of release (%s)", msg.result.LatestVersion)
+			if msg.manual {
+				m.setStatus(fmt.Sprintf("ahead of release (%s)", msg.result.LatestVersion))
+			}
+		} else if msg.manual {
+			m.setStatus("unable to check for updates")
 		}
 		m.refreshViewport()
 	case refreshMsg:
