@@ -13,6 +13,7 @@ import (
 	"os"
 
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/pi"
 	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/statusline"
 	"github.com/fullfran/claudeops-tui/internal/usage"
@@ -820,5 +821,119 @@ func TestStatuslineOverlaysStaleLocalProviderInFreshCache(t *testing.T) {
 	}
 	if len(c.Providers) != 1 || !strings.EqualFold(c.Providers[0].Provider, "codex") {
 		t.Errorf("the stale local entry must be dropped from the cache on disk, got %+v", c.Providers)
+	}
+}
+
+func TestStatuslinePiSessionOpenAIUnavailableNeverFallsBackToClaude(t *testing.T) {
+	t.Setenv("TMUX", "")
+	tempAgent := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", tempAgent)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(tempAgent, "sessions", pi.SafeCwd(cwd))
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(sessionDir, "session.jsonl")
+	content := `{"type":"session"}
+{"type":"model_change","provider":"openai","modelId":"gpt-6.1-sol"}
+`
+	if err := os.WriteFile(sessionFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := statuslinePaths(t, "pi")
+	f := &fakeFetcher{snap: snapAt(42)} // Claude quota available, but MUST NOT be used!
+	reg := &fakeRegistry{usages: []provider.Usage{codexResult(12)}}
+
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "pi"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+
+	got := strings.TrimSpace(out.String())
+	if got != "openai: unavailable" {
+		t.Errorf("got %q, want 'openai: unavailable'", got)
+	}
+	if f.calls != 0 {
+		t.Errorf("Claude fetcher must never be called for OpenAI Pi session, got %d calls", f.calls)
+	}
+}
+
+func TestStatuslinePiSessionResolvesAnthropic(t *testing.T) {
+	t.Setenv("TMUX", "")
+	tempAgent := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", tempAgent)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(tempAgent, "sessions", pi.SafeCwd(cwd))
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(sessionDir, "session.jsonl")
+	content := `{"type":"session"}
+{"type":"model_change","provider":"anthropic","modelId":"claude-3-5-sonnet"}
+`
+	if err := os.WriteFile(sessionFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := statuslinePaths(t, "pi")
+	f := &fakeFetcher{snap: snapAt(55)}
+	reg := &fakeRegistry{}
+
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "pi"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+
+	got := strings.TrimSpace(out.String())
+	if got != "5h 55%" {
+		t.Errorf("got %q, want '5h 55%%'", got)
+	}
+	if f.calls == 0 {
+		t.Errorf("Claude fetcher should be called when Pi is using Anthropic")
+	}
+}
+
+func TestStatuslinePiSessionResolvesAntigravity(t *testing.T) {
+	t.Setenv("TMUX", "")
+	tempAgent := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", tempAgent)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(tempAgent, "sessions", pi.SafeCwd(cwd))
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(sessionDir, "session.jsonl")
+	content := `{"type":"session"}
+{"type":"model_change","provider":"agy","modelId":"gemini-3.8-flash-medium"}
+`
+	if err := os.WriteFile(sessionFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := statuslinePaths(t, "pi")
+	f := &fakeFetcher{snap: snapAt(99)}
+	reg := &fakeRegistry{usages: []provider.Usage{antigravityResult(33)}}
+
+	var out bytes.Buffer
+	if err := cmdStatuslineWith(p, &out, []string{"--provider", "pi"}, f, reg); err != nil {
+		t.Fatal(err)
+	}
+
+	got := strings.TrimSpace(out.String())
+	if got != "5h 33%" {
+		t.Errorf("got %q, want '5h 33%%'", got)
 	}
 }

@@ -40,6 +40,9 @@ type Usage struct {
 	Source string
 	// FetchedAt is when this snapshot was retrieved.
 	FetchedAt time.Time
+	// Unavailable marks that the provider was requested or detected but its
+	// quota endpoint is not supported or cannot be verified.
+	Unavailable bool
 }
 
 // Provider fetches live subscription/quota usage for one service.

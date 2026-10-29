@@ -39,21 +39,47 @@ func DetectAgent(known map[string]string) string {
 	return ""
 }
 
-// activePane returns the command and pid of the pane the user is looking at.
-func activePane() (string, string) {
+// PaneInfo carries the command, pid, and cwd of the active tmux pane.
+type PaneInfo struct {
+	Command string
+	PID     string
+	Cwd     string
+}
+
+// ActivePane returns details of the pane the user is looking at.
+func ActivePane() PaneInfo {
 	if os.Getenv("TMUX") == "" {
-		return "", ""
+		return PaneInfo{}
 	}
 	out, err := exec.Command("tmux", "display-message", "-p",
-		"#{pane_current_command}\t#{pane_pid}").Output()
+		"#{pane_current_command}\t#{pane_pid}\t#{pane_current_path}").Output()
 	if err != nil {
-		return "", ""
+		return PaneInfo{}
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
-	if len(parts) != 2 {
-		return "", ""
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 3)
+	info := PaneInfo{}
+	if len(parts) >= 1 {
+		info.Command = parts[0]
 	}
-	return parts[0], parts[1]
+	if len(parts) >= 2 {
+		info.PID = parts[1]
+	}
+	if len(parts) >= 3 {
+		info.Cwd = parts[2]
+	}
+	return info
+}
+
+// ActivePaneCwd returns the working directory of the active tmux pane, or ""
+// when outside tmux or unresolvable.
+func ActivePaneCwd() string {
+	return ActivePane().Cwd
+}
+
+// activePane returns the command and pid of the pane the user is looking at.
+func activePane() (string, string) {
+	info := ActivePane()
+	return info.Command, info.PID
 }
 
 // matchKnown resolves a command name against the configured agent map.
@@ -101,6 +127,10 @@ func scanProcessTree(pid string, known map[string]string) string {
 	sort.Strings(names)
 
 	pids := append([]string{pid}, childPIDs(pid)...)
+	// Inspect grandchildren for wrapper launchers (e.g. shell -> node gentle-shell -> pi)
+	for _, cpid := range childPIDs(pid) {
+		pids = append(pids, childPIDs(cpid)...)
+	}
 	for _, p := range pids {
 		line := cmdline(p)
 		if line == "" {

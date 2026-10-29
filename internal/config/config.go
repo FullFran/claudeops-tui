@@ -241,11 +241,13 @@ func DefaultSettings() Settings {
 			Enabled:  boolPtr(true),
 			Provider: "auto",
 			Agents: map[string]string{
-				"claude":   "claude",
-				"opencode": "codex",
-				"codex":    "codex",
-				"crush":    "codex",
-				"agy":      "antigravity",
+				"claude":       "claude",
+				"opencode":     "codex",
+				"codex":        "codex",
+				"crush":        "codex",
+				"agy":          "antigravity",
+				"pi":           "pi",
+				"gentle-shell": "pi",
 			},
 		},
 		Export: ExportSettings{

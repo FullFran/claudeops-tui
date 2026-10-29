@@ -292,6 +292,12 @@ func TestDefaultSettingsMapsAgyToAntigravity(t *testing.T) {
 	if got != "antigravity" {
 		t.Errorf(`Statusline.Agents["agy"] = %q, want "antigravity"`, got)
 	}
+	if gotPi := DefaultSettings().Statusline.Agents["pi"]; gotPi != "pi" {
+		t.Errorf(`Statusline.Agents["pi"] = %q, want "pi"`, gotPi)
+	}
+	if gotGS := DefaultSettings().Statusline.Agents["gentle-shell"]; gotGS != "pi" {
+		t.Errorf(`Statusline.Agents["gentle-shell"] = %q, want "pi"`, gotGS)
+	}
 }
 
 // TestLoadMergesNewAgentDefaultIntoExistingTable is a regression test for a
