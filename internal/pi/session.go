@@ -42,6 +42,9 @@ func AgentDirs() []string {
 	if env := os.Getenv("GENTLE_SHELL_AGENT_DIR"); env != "" {
 		dirs = append(dirs, env)
 	}
+	if len(dirs) > 0 {
+		return dirs
+	}
 	home, err := os.UserHomeDir()
 	if err == nil {
 		dirs = append(dirs, filepath.Join(home, ".gentle-shell", "agent"))

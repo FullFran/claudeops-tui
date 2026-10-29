@@ -63,6 +63,7 @@ var (
 	runPushCommand       = cmdPush
 	runOTelConfigCommand = cmdOTelConfig
 	runAgyCommand        = cmdAgy
+	runPiCommand         = cmdPi
 )
 
 func run() error {
@@ -101,6 +102,20 @@ func runArgs(args []string) error {
 		return runStatuslineCommand(args[1:])
 	case "agy":
 		return runAgyCommand(args[1:])
+	case "pi":
+		return runPiCommand(args[1:])
+	case "install":
+		if len(args) > 1 && (args[1] == "pi-plugin" || args[1] == "pi") {
+			return runPiCommand(append([]string{"setup"}, args[2:]...))
+		}
+		fprintHelp(os.Stderr)
+		return fmt.Errorf("unknown install target: %s", strings.Join(args[1:], " "))
+	case "uninstall":
+		if len(args) > 1 && (args[1] == "pi-plugin" || args[1] == "pi") {
+			return runPiCommand([]string{"remove"})
+		}
+		fprintHelp(os.Stderr)
+		return fmt.Errorf("unknown uninstall target: %s", strings.Join(args[1:], " "))
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -140,6 +155,10 @@ Usage:
   claudeops agy setup [--force]                 wire claudeops as agy's status line
   claudeops agy remove                          remove claudeops as agy's status line
   claudeops agy status                          show whether agy is wired up, and the last quota reading
+  claudeops pi setup [--force]                  install the claudeops extension into Pi / Gentle Shell
+  claudeops pi remove                           remove the claudeops extension from Pi / Gentle Shell
+  claudeops pi status                           show whether the extension is installed
+  claudeops install pi-plugin                   install the claudeops extension into Pi / Gentle Shell
   claudeops hooks status                        show which hooks are registered
   claudeops hooks handle                        handle a Claude Code hook event on stdin (invoked by Claude Code)
   claudeops push [--dry-run] [--since RFC3339]  push metrics to OTLP endpoint
