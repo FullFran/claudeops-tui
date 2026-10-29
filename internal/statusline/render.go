@@ -99,6 +99,11 @@ const (
 // than a row of zeroes.
 func Render(snap usage.Snapshot, providers []provider.Usage, o Options) (string, error) {
 	groups := selectGroups(snap, providers, o.Provider)
+	return RenderGroups(groups, o)
+}
+
+// RenderGroups formats pre-selected groups into a status line.
+func RenderGroups(groups []Group, o Options) (string, error) {
 	switch o.Format {
 	case FormatJSON:
 		b, err := json.Marshal(groups)
@@ -119,9 +124,10 @@ func Render(snap usage.Snapshot, providers []provider.Usage, o Options) (string,
 // output stays snake_case and stable: this is a public interface for scripts,
 // and it should not shift because an internal struct gained a field.
 type Group struct {
-	Provider string   `json:"provider"`
-	Windows  []Window `json:"windows"`
-	Note     string   `json:"note,omitempty"`
+	Provider    string   `json:"provider"`
+	Windows     []Window `json:"windows"`
+	Note        string   `json:"note,omitempty"`
+	Unavailable bool     `json:"unavailable,omitempty"`
 }
 
 // Window is one quota window in a Group.
@@ -162,10 +168,15 @@ func selectGroups(snap usage.Snapshot, providers []provider.Usage, want string) 
 		if !all && name != want {
 			continue
 		}
-		if len(p.Windows) == 0 {
+		if len(p.Windows) == 0 && !p.Unavailable {
 			continue
 		}
-		groups = append(groups, Group{Provider: name, Windows: toWindows(p.Windows), Note: p.Note})
+		groups = append(groups, Group{
+			Provider:    name,
+			Windows:     toWindows(p.Windows),
+			Note:        p.Note,
+			Unavailable: p.Unavailable,
+		})
 	}
 	return groups
 }
@@ -205,6 +216,14 @@ func claudeNote(snap usage.Snapshot) string {
 func renderCompact(groups []Group, o Options) string {
 	var parts []string
 	for _, g := range groups {
+		if g.Unavailable {
+			label := "unavailable"
+			if g.Provider != "" {
+				label = g.Provider + ": unavailable"
+			}
+			parts = append(parts, o.Colour.wrap(label, levelWarn))
+			continue
+		}
 		var segs []string
 		if o.ShowLabels {
 			segs = append(segs, g.Provider)
@@ -247,6 +266,14 @@ func renderPlain(groups []Group, o Options) string {
 		fmt.Fprintf(&sb, "%s\n", o.Prefix)
 	}
 	for _, g := range groups {
+		if g.Unavailable {
+			label := "unavailable"
+			if g.Provider != "" {
+				label = g.Provider + ": unavailable"
+			}
+			fmt.Fprintf(&sb, "%s\n", label)
+			continue
+		}
 		if o.ShowLabels {
 			fmt.Fprintf(&sb, "%s\n", g.Provider)
 		}

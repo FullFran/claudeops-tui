@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fullfran/claudeops-tui/internal/config"
+	"github.com/fullfran/claudeops-tui/internal/pi"
 	"github.com/fullfran/claudeops-tui/internal/provider"
 	"github.com/fullfran/claudeops-tui/internal/statusline"
 	"github.com/fullfran/claudeops-tui/internal/usage"
@@ -127,6 +128,32 @@ func cmdStatuslineWith(p config.Paths, out io.Writer, args []string, fetch snaps
 		Reset:      *reset,
 		WarnAt:     *warnAt,
 		CritAt:     *critAt,
+	}
+
+	if strings.EqualFold(want, "pi") {
+		cwd := statusline.ActivePaneCwd()
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
+		res := pi.ResolveSessionProvider(cwd)
+		if res.Unavailable {
+			groups := []statusline.Group{{
+				Provider:    res.RawProvider,
+				Unavailable: true,
+				Note:        res.Reason,
+			}}
+			opts.Provider = res.RawProvider
+			line, err := statusline.RenderGroups(groups, opts)
+			if err != nil {
+				return err
+			}
+			if line != "" {
+				_, _ = fmt.Fprintln(out, line)
+			}
+			return nil
+		}
+		want = res.MappedName
+		opts.Provider = want
 	}
 	now := time.Now()
 

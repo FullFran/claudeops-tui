@@ -204,4 +204,36 @@ func TestShortDuration(t *testing.T) {
 	}
 }
 
+func TestRenderUnavailable(t *testing.T) {
+	groups := []Group{
+		{Provider: "openai", Unavailable: true},
+	}
+	// Compact
+	compact, err := RenderGroups(groups, Options{Format: FormatCompact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compact != "openai: unavailable" {
+		t.Errorf("compact = %q, want %q", compact, "openai: unavailable")
+	}
+
+	// Plain
+	plain, err := RenderGroups(groups, Options{Format: FormatPlain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(plain) != "openai: unavailable" {
+		t.Errorf("plain = %q, want %q", plain, "openai: unavailable")
+	}
+
+	// JSON
+	jsonStr, err := RenderGroups(groups, Options{Format: FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonStr, `"unavailable":true`) || !strings.Contains(jsonStr, `"provider":"openai"`) {
+		t.Errorf("json = %s, missing expected fields", jsonStr)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
