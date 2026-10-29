@@ -391,4 +391,3 @@ auto = true
 		t.Errorf("expected update.auto to be true, got false")
 	}
 }
-

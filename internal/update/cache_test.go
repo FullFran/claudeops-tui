@@ -103,10 +103,10 @@ type cacheMockRunner struct {
 	execPath string
 }
 
-func (m cacheMockRunner) Executable() (string, error)               { return m.execPath, nil }
-func (m cacheMockRunner) EvalSymlinks(p string) (string, error)      { return p, nil }
-func (m cacheMockRunner) LookPath(file string) (string, error)       { return "/bin/go", nil }
-func (m cacheMockRunner) GoEnv(ctx context.Context) (Env, error)     { return Env{GOBIN: "/bin"}, nil }
+func (m cacheMockRunner) Executable() (string, error)            { return m.execPath, nil }
+func (m cacheMockRunner) EvalSymlinks(p string) (string, error)  { return p, nil }
+func (m cacheMockRunner) LookPath(file string) (string, error)   { return "/bin/go", nil }
+func (m cacheMockRunner) GoEnv(ctx context.Context) (Env, error) { return Env{GOBIN: "/bin"}, nil }
 func (m cacheMockRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return nil, nil
 }
