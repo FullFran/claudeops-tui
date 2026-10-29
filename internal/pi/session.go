@@ -208,7 +208,7 @@ func scanSessionJSONL(path string) (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Read lines to find the last model change or assistant message
 	var lastProvider, lastModel string
