@@ -191,7 +191,7 @@ func settingsItems() []settingsItem {
 		// ── Updates ──────────────────────────────────────────────────────────
 		{section: true, label: "Updates"},
 		{label: "Check on launch", desc: "check for newer releases in background",
-			get:    func(s config.Settings) bool { return s.Update.IsCheckEnabled() },
+			get: func(s config.Settings) bool { return s.Update.IsCheckEnabled() },
 			toggle: func(s *config.Settings) {
 				val := !s.Update.IsCheckEnabled()
 				s.Update.Check = &val

@@ -33,14 +33,14 @@ type Model struct {
 	Usage *usage.Client
 	// Providers holds additional live-quota providers (Codex, ...) beyond the
 	// bespoke Anthropic block. Nil disables the multi-provider section.
-	Providers      *provider.Registry
-	Tasks          *tasks.Tracker
-	Settings       config.Settings
-	ConfigPath     string // path to config.toml for live saves
-	PricingUpdated string
-	Version        string
-	ProjectsRoot   string // ~/.claude/projects — scanned for live sessions
-	LiveDir        string // ~/.claudeops/live — hook-written session sidecars
+	Providers       *provider.Registry
+	Tasks           *tasks.Tracker
+	Settings        config.Settings
+	ConfigPath      string // path to config.toml for live saves
+	PricingUpdated  string
+	Version         string
+	ProjectsRoot    string // ~/.claude/projects — scanned for live sessions
+	LiveDir         string // ~/.claudeops/live — hook-written session sidecars
 	UpdateCachePath string // ~/.claudeops/update-cache.json
 	UpdateAvailable string // newer version available (e.g. "0.17.0"), empty if none
 	UpdateStatus    string // summary of update status for settings/status
