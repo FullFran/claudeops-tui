@@ -500,6 +500,7 @@ func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model 
 	model.ConfigPath = p.ConfigPath
 	model.ProjectsRoot = p.ClaudeProjects
 	model.LiveDir = p.LiveDir
+	model.SessionsDir = filepath.Join(filepath.Dir(p.ClaudeProjects), "sessions")
 	model.UpdateCachePath = p.UpdateCachePath
 	// Pets are drawn in true color, so other terminals keep the monkeys, with nothing said.
 	if lipgloss.ColorProfile() == termenv.TrueColor {

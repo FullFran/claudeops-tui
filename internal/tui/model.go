@@ -41,6 +41,7 @@ type Model struct {
 	Version         string
 	ProjectsRoot    string // ~/.claude/projects — scanned for live sessions
 	LiveDir         string // ~/.claudeops/live — hook-written session sidecars
+	SessionsDir     string // where Claude Code lists its running sessions
 	UpdateCachePath string // ~/.claudeops/update-cache.json
 	UpdateAvailable string // newer version available (e.g. "0.17.0"), empty if none
 	UpdateStatus    string // summary of update status for settings/status
@@ -472,7 +473,7 @@ func refreshCmd(m Model) tea.Cmd {
 			}
 		}
 		if m.ProjectsRoot != "" || m.LiveDir != "" {
-			if sessions, err := live.Scan(m.ProjectsRoot, live.Config{LiveDir: m.LiveDir}); err == nil {
+			if sessions, err := live.Scan(m.ProjectsRoot, live.Config{LiveDir: m.LiveDir, SessionsDir: m.SessionsDir}); err == nil {
 				msg.liveSessions = sessions
 			}
 		}

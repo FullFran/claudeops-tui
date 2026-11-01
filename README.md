@@ -251,6 +251,8 @@ Press `7` for a live grid of your currently-running Claude Code sessions — one
 - ✨ **working** — the session is producing output
 - 💤 **waiting** — the session is waiting for your input
 
+Closed sessions leave as soon as Claude Code stops listing them in
+`~/.claude/sessions`; versions without that list go by recent activity alone.
 Sessions are discovered from `~/.claude/projects` file activity. Install the
 hooks (`claudeops hooks install`) for accurate state; without them the state is
 inferred from file mtimes alone.

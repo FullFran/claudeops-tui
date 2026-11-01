@@ -1,8 +1,12 @@
 package live
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -209,5 +213,130 @@ func TestScan_SidecarKeepsStaleSessionVisible(t *testing.T) {
 	}
 	if sessions[0].SessionID != "sid-2" || sessions[0].State != StateWaiting {
 		t.Errorf("unexpected: %+v", sessions[0])
+	}
+}
+
+// writeRegistered leaves the file Claude Code keeps for a running session.
+func writeRegistered(t *testing.T, dir string, pid int, sessionID string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"kind":"interactive"}`, pid, sessionID)
+	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", pid)), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// goneProcess returns the id of a process that has just finished.
+func goneProcess(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func scanIDs(t *testing.T, root string, cfg Config) []string {
+	t.Helper()
+	sessions, err := Scan(root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, s := range sessions {
+		ids = append(ids, s.SessionID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func TestScan_KeepsOnlyRunningSessionsWhenClaudeListsThem(t *testing.T) {
+	root, sessions, liveDir := t.TempDir(), t.TempDir(), t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	project := filepath.Join(root, "-home-me-alpha")
+	old := now.Add(-10 * time.Minute)
+	last := []string{`{"type":"assistant","uuid":"1"}`}
+	writeJSONL(t, filepath.Join(project, "running.jsonl"), last, old)
+	writeJSONL(t, filepath.Join(project, "closed.jsonl"), last, old)
+	writeJSONL(t, filepath.Join(project, "crashed.jsonl"), last, old)
+	writeJSONL(t, filepath.Join(project, "unlisted-but-writing.jsonl"), last, now.Add(-2*time.Second))
+	writeRegistered(t, sessions, os.Getpid(), "running")
+	writeRegistered(t, sessions, goneProcess(t), "crashed")
+	if err := os.WriteFile(filepath.Join(sessions, "broken.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessions, "1.notes.key"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A session that was closed without its last hook still says it is working.
+	sidecar := fmt.Sprintf(`{"session_id":"closed","project_path":"/home/me/alpha","state":"working","updated_at":%q}`,
+		now.Add(-time.Minute).Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(liveDir, "closed.json"), []byte(sidecar), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := scanIDs(t, root, Config{SessionsDir: sessions, LiveDir: liveDir, Now: func() time.Time { return now }})
+	if want := []string{"running", "unlisted-but-writing"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestScan_DropsASidecarOnlySessionWhoseProcessIsGone(t *testing.T) {
+	root, sessions, liveDir := t.TempDir(), t.TempDir(), t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	for _, id := range []string{"running", "closed"} {
+		sidecar := fmt.Sprintf(`{"session_id":%q,"project_path":"/home/me/alpha","state":"waiting","updated_at":%q}`,
+			id, now.Add(-time.Minute).Format(time.RFC3339))
+		if err := os.WriteFile(filepath.Join(liveDir, id+".json"), []byte(sidecar), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRegistered(t, sessions, os.Getpid(), "running")
+	cfg := Config{SessionsDir: sessions, LiveDir: liveDir, Now: func() time.Time { return now }}
+
+	if got, want := scanIDs(t, root, cfg), []string{"running"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("with projects: got %v, want %v", got, want)
+	}
+	if got, want := scanIDs(t, filepath.Join(root, "missing"), cfg), []string{"running"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("without projects: got %v, want %v", got, want)
+	}
+}
+
+func TestScan_WithoutClaudesListGoesByRecentActivityAsBefore(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	writeJSONL(t, filepath.Join(root, "-home-me-alpha", "recent.jsonl"),
+		[]string{`{"type":"assistant","uuid":"1"}`}, now.Add(-10*time.Minute))
+	clock := func() time.Time { return now }
+
+	for name, dir := range map[string]string{"not set": "", "missing": filepath.Join(root, "no-such-dir")} {
+		got := scanIDs(t, root, Config{SessionsDir: dir, Now: clock})
+		if want := []string{"recent"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: got %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestScan_AListItCannotReadSaysNothing(t *testing.T) {
+	root, sessions := t.TempDir(), t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	writeJSONL(t, filepath.Join(root, "-home-me-alpha", "recent.jsonl"),
+		[]string{`{"type":"assistant","uuid":"1"}`}, now.Add(-10*time.Minute))
+	// What a future Claude Code that renamed its fields would leave.
+	if err := os.WriteFile(filepath.Join(sessions, "42.json"), []byte(`{"process":42,"id":"recent"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := scanIDs(t, root, Config{SessionsDir: sessions, Now: func() time.Time { return now }})
+	if want := []string{"recent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestScan_AnEmptyListMeansNothingIsRunning(t *testing.T) {
+	root, sessions := t.TempDir(), t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	writeJSONL(t, filepath.Join(root, "-home-me-alpha", "closed.jsonl"),
+		[]string{`{"type":"assistant","uuid":"1"}`}, now.Add(-10*time.Minute))
+	if got := scanIDs(t, root, Config{SessionsDir: sessions, Now: func() time.Time { return now }}); len(got) != 0 {
+		t.Fatalf("got %v, want none", got)
 	}
 }
