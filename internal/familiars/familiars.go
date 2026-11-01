@@ -37,6 +37,8 @@ const askTimeout = 30 * time.Second
 // Client talks to one familiard program.
 type Client struct {
 	Path string
+	// Octants asks for pets drawn with block octants, which are sharper but not known everywhere.
+	Octants bool
 	// run is the seam tests use. It returns stdout, and an error carrying stderr.
 	run func(ctx context.Context, path string, args ...string) ([]byte, error)
 }
@@ -68,6 +70,13 @@ func runProgram(ctx context.Context, path string, args ...string) ([]byte, error
 		return nil, fmt.Errorf("%s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+// DrawsOctants says whether this terminal is known to draw block octants. Ghostty is the one that
+// has been seen doing it; anywhere else a missing character would be worse than a coarser pet.
+// Inside tmux the terminal's own variable survives, while TERM and TERM_PROGRAM name tmux.
+func DrawsOctants(getenv func(string) string) bool {
+	return getenv("TERM_PROGRAM") == "ghostty" || getenv("TERM") == "xterm-ghostty" || getenv("GHOSTTY_RESOURCES_DIR") != ""
 }
 
 // Clip is one animation, as frames of text with their colors in ANSI sequences.
@@ -121,7 +130,11 @@ func (c *Client) List(ctx context.Context) ([]string, error) {
 func (c *Client) Load(ctx context.Context, id string, rows int) (*Pack, error) {
 	ctx, cancel := context.WithTimeout(ctx, askTimeout)
 	defer cancel()
-	out, err := c.run(ctx, c.Path, "frames", id, "--rows", strconv.Itoa(rows))
+	args := []string{"frames", id, "--rows", strconv.Itoa(rows)}
+	if c.Octants {
+		args = append(args, "--octants")
+	}
+	out, err := c.run(ctx, c.Path, args...)
 	if err != nil {
 		if strings.Contains(err.Error(), "unknown command") {
 			return nil, ErrOutdated

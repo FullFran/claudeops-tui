@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,5 +148,48 @@ func TestFindPrefersWhatIsOnThePath(t *testing.T) {
 	}
 	if got := Find(own); got == nil || got.Path != filepath.Join(onPath, ProgramName()) {
 		t.Fatalf("the user's own familiard must win: %+v", got)
+	}
+}
+
+func TestLoadAsksForOctantsOnlyWhenTheTerminalDrawsThem(t *testing.T) {
+	answer := `{"id":"a","rows":2,"columns":3,"clips":{"idle":{"fps":2,"frames":["x"]}}}`
+	for _, tt := range []struct {
+		octants bool
+		want    string
+	}{
+		{false, "frames a --rows 2"},
+		{true, "frames a --rows 2 --octants"},
+	} {
+		var asked string
+		client := &Client{Path: "familiard", Octants: tt.octants, run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			asked = strings.Join(args, " ")
+			return []byte(answer), nil
+		}}
+		if _, err := client.Load(context.Background(), "a", 2); err != nil {
+			t.Fatal(err)
+		}
+		if asked != tt.want {
+			t.Errorf("asked %q, want %q", asked, tt.want)
+		}
+	}
+}
+
+func TestDrawsOctants(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"ghostty", map[string]string{"TERM_PROGRAM": "ghostty"}, true},
+		{"ghostty inside tmux", map[string]string{"TERM_PROGRAM": "tmux", "GHOSTTY_RESOURCES_DIR": "/share/ghostty"}, true},
+		{"ghostty's terminfo", map[string]string{"TERM": "xterm-ghostty"}, true},
+		{"anything else", map[string]string{"TERM_PROGRAM": "iTerm.app", "TERM": "xterm-256color"}, false},
+		{"nothing known", nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DrawsOctants(func(key string) string { return tt.env[key] }); got != tt.want {
+				t.Errorf("got %v", got)
+			}
+		})
 	}
 }

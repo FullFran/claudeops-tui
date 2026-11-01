@@ -504,7 +504,11 @@ func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model 
 	model.UpdateCachePath = p.UpdateCachePath
 	// Pets are drawn in true color, so other terminals keep the monkeys, with nothing said.
 	if lipgloss.ColorProfile() == termenv.TrueColor {
-		model = model.WithFamiliars(familiars.Find(familiardDir(p)))
+		client := familiars.Find(familiardDir(p))
+		if client != nil {
+			client.Octants = familiars.DrawsOctants(os.Getenv)
+		}
+		model = model.WithFamiliars(client)
 	}
 	// Additional live-quota providers beyond the bespoke Anthropic block.
 	// Each is skipped silently when its credentials are absent.

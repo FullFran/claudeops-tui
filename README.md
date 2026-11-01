@@ -253,6 +253,9 @@ Press `7` for a live grid of your currently-running Claude Code sessions — one
 
 Closed sessions leave as soon as Claude Code stops listing them in
 `~/.claude/sessions`; versions without that list go by recent activity alone.
+On Ghostty, familiard pets are drawn with block octants, which are sharper; other
+terminals get half blocks.
+
 Sessions are discovered from `~/.claude/projects` file activity. Install the
 hooks (`claudeops hooks install`) for accurate state; without them the state is
 inferred from file mtimes alone.
