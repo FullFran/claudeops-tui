@@ -142,7 +142,7 @@ func (c *Client) Load(ctx context.Context, id string, rows int) (*Pack, error) {
 // printable keeps a name from someone else's pack from reaching the terminal as a command.
 func printable(name string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r
@@ -150,8 +150,8 @@ func printable(name string) string {
 }
 
 // Assigner gives each session a pet of its own. The choice looks random but comes from the
-// session's id, so a session keeps its pet across restarts, and it stays put while the program
-// runs. Pets only repeat once there are more sessions than pets.
+// session's id, so a session usually gets the same pet after a restart, and it stays put while
+// the program runs. Pets only repeat once there are more sessions than pets.
 type Assigner struct {
 	chosen map[string]string
 }

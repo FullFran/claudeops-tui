@@ -67,18 +67,18 @@ func cmdFamiliardWith(out io.Writer, args []string, dir string, installer func(i
 		fmt.Fprintf(out, "using %s (%s)\n", found.Path, familiardVersion(found.Path))
 		return nil
 	case "remove", "uninstall":
-		if !mine {
-			if found != nil {
-				fmt.Fprintf(out, "%s was not installed by claudeops, so it stays\n", found.Path)
-			} else {
-				fmt.Fprintln(out, "claudeops has not installed familiard")
-			}
-			return nil
-		}
-		if err := os.Remove(own); err != nil {
+		// Only ever our own copy, even when another one is the one in use.
+		err := os.Remove(own)
+		switch {
+		case err == nil:
+			fmt.Fprintf(out, "removed %s; your pets are still in familiard's gallery\n", own)
+		case !os.IsNotExist(err):
 			return fmt.Errorf("familiard: %w", err)
+		case found != nil:
+			fmt.Fprintf(out, "%s was not installed by claudeops, so it stays\n", found.Path)
+		default:
+			fmt.Fprintln(out, "claudeops has not installed familiard")
 		}
-		fmt.Fprintf(out, "removed %s; your pets are still in familiard's gallery\n", own)
 		return nil
 	default:
 		return fmt.Errorf("familiard: unknown subcommand %q", args[0])

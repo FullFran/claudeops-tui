@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/fullfran/claudeops-tui/internal/config"
 	"github.com/fullfran/claudeops-tui/internal/familiars"
 	"github.com/fullfran/claudeops-tui/internal/live"
 )
@@ -131,6 +132,10 @@ func TestHints(t *testing.T) {
 	if c.hint() != "" {
 		t.Errorf("nothing to say before an answer: %q", c.hint())
 	}
+	c.listed(familiarsListedMsg{err: errors.New("broken")})
+	if c.hint() != "" {
+		t.Errorf("a gallery that failed is not an empty one: %q", c.hint())
+	}
 	c.listed(familiarsListedMsg{})
 	if c.hint() != emptyHint {
 		t.Errorf("got %q", c.hint())
@@ -233,5 +238,16 @@ func TestClipForFollowsTheState(t *testing.T) {
 		if got := clipFor(st); got != want {
 			t.Errorf("%v: got %s", st, got)
 		}
+	}
+}
+
+func TestPressingTheTabsNumberStartsThePetsAtOnce(t *testing.T) {
+	m := classroomModel(familiars.NewClient("familiard"), "s1")
+	m.activeTab = TabDashboard
+	m.Settings = config.DefaultSettings()
+	var model tea.Model = m
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("7")})
+	if cmd == nil || !m.classroom.asked {
+		t.Error("the gallery should be asked for without waiting for the next refresh")
 	}
 }

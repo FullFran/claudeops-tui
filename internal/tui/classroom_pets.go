@@ -86,8 +86,9 @@ func (c *classroomPets) packFor(session string) *familiars.Pack {
 }
 
 func (c *classroomPets) listed(msg familiarsListedMsg) {
-	c.answered = true
+	// A gallery that could not be read is not an empty one: the monkeys stay, with nothing said.
 	if msg.err == nil {
+		c.answered = true
 		c.pets = msg.pets
 	}
 }

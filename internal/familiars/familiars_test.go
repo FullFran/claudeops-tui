@@ -26,7 +26,7 @@ func TestListReadsTheIds(t *testing.T) {
 }
 
 func TestLoad(t *testing.T) {
-	good := `{"id":"a","name":"A\u001b[31m!","rows":2,"columns":3,"clips":{"idle":{"fps":2,"frames":["x\ny"]}}}`
+	good := `{"id":"a","name":"A\u001b[31m\u202e!","rows":2,"columns":3,"clips":{"idle":{"fps":2,"frames":["x\ny"]}}}`
 	tests := []struct {
 		name    string
 		answer  string

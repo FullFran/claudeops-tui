@@ -83,6 +83,23 @@ func TestRemoveOnlyTouchesWhatClaudeopsInstalled(t *testing.T) {
 	}
 }
 
+func TestRemoveTakesOurCopyEvenWhenAnotherIsInUse(t *testing.T) {
+	onPath := t.TempDir()
+	theirs := program(t, onPath)
+	t.Setenv("PATH", onPath)
+	dir := t.TempDir()
+	ours := program(t, dir)
+	if err := cmdFamiliardWith(io.Discard, []string{"remove"}, dir, noDownloads(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ours); !os.IsNotExist(err) {
+		t.Errorf("ours should be gone: %v", err)
+	}
+	if _, err := os.Stat(theirs); err != nil {
+		t.Errorf("theirs must stay: %v", err)
+	}
+}
+
 func TestStatusSaysWhichOneIsUsed(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake program is a shell script")

@@ -598,7 +598,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if tabVisible(t, m.Settings) {
 				m.selectTab(t)
 			}
-			return m, nil
+			return m, tea.Batch(m.classroom.next(m.activeTab == TabClassroom, m.LiveSessions)...)
 		case " ":
 			if m.activeTab == TabSettings {
 				items := settingsItems()
