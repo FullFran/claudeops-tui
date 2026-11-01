@@ -21,12 +21,16 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/charmbracelet/lipgloss"
 	agyingester "github.com/fullfran/claudeops-tui/internal/agy"
 	"github.com/fullfran/claudeops-tui/internal/buildinfo"
 	"github.com/fullfran/claudeops-tui/internal/codex"
 	"github.com/fullfran/claudeops-tui/internal/collector"
+	"github.com/muesli/termenv"
+
 	"github.com/fullfran/claudeops-tui/internal/config"
 	"github.com/fullfran/claudeops-tui/internal/export"
+	"github.com/fullfran/claudeops-tui/internal/familiars"
 	"github.com/fullfran/claudeops-tui/internal/hooks"
 	"github.com/fullfran/claudeops-tui/internal/mcpserver"
 	ocingester "github.com/fullfran/claudeops-tui/internal/opencode"
@@ -64,6 +68,7 @@ var (
 	runOTelConfigCommand = cmdOTelConfig
 	runAgyCommand        = cmdAgy
 	runPiCommand         = cmdPi
+	runFamiliardCommand  = cmdFamiliard
 )
 
 func run() error {
@@ -104,6 +109,8 @@ func runArgs(args []string) error {
 		return runAgyCommand(args[1:])
 	case "pi":
 		return runPiCommand(args[1:])
+	case "familiard":
+		return runFamiliardCommand(args[1:])
 	case "install":
 		if len(args) > 1 && (args[1] == "pi-plugin" || args[1] == "pi") {
 			return runPiCommand(append([]string{"setup"}, args[2:]...))
@@ -157,6 +164,9 @@ Usage:
   claudeops agy status                          show whether agy is wired up, and the last quota reading
   claudeops pi setup [--force]                  install the claudeops extension into Pi / Gentle Shell
   claudeops pi remove                           remove the claudeops extension from Pi / Gentle Shell
+  claudeops familiard install                   let the Classroom tab show familiard pets (uses yours if you have it)
+  claudeops familiard status                    show which familiard the Classroom tab uses
+  claudeops familiard remove                    remove the familiard claudeops installed
   claudeops pi status                           show whether the extension is installed
   claudeops install pi-plugin                   install the claudeops extension into Pi / Gentle Shell
   claudeops hooks status                        show which hooks are registered
@@ -491,6 +501,10 @@ func buildTUIModel(p config.Paths, settings config.Settings, c *core) tui.Model 
 	model.ProjectsRoot = p.ClaudeProjects
 	model.LiveDir = p.LiveDir
 	model.UpdateCachePath = p.UpdateCachePath
+	// Pets are drawn in true color, so other terminals keep the monkeys, with nothing said.
+	if lipgloss.ColorProfile() == termenv.TrueColor {
+		model = model.WithFamiliars(familiars.Find(familiardDir(p)))
+	}
 	// Additional live-quota providers beyond the bespoke Anthropic block.
 	// Each is skipped silently when its credentials are absent.
 	model.Providers = provider.NewRegistry(

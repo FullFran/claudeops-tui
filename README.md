@@ -255,6 +255,13 @@ Sessions are discovered from `~/.claude/projects` file activity. Install the
 hooks (`claudeops hooks install`) for accurate state; without them the state is
 inferred from file mtimes alone.
 
+With [familiard](https://github.com/FullFran/familiard), each session gets one of
+your pets at its desk instead of a monkey, chosen at random and animated by what
+the session is doing. It is optional. If `familiard` is on your `PATH` it is used
+as it is, and if not, `claudeops familiard install` downloads the latest release
+into `~/.claudeops/bin`, after checking it against the release's checksums. Pets
+need a true color terminal, and familiard 0.3.7 or newer.
+
 ### MCP server
 
 The MCP server exposes your usage data to **Claude Code**, **opencode**, **Cursor**, or any MCP-compatible client. This lets you ask questions about your usage conversationally:
@@ -399,6 +406,7 @@ Three ways to read the same data, all backed by one shared cache:
 | `~/.claudeops/usage-cache.json` | statusline snapshot cache, atomic + 0600 |
 | `~/.claudeops/antigravity-quota.json` | Antigravity (agy) quota snapshot, written by `claudeops agy statusline`, atomic + 0600 |
 | `~/.claudeops/live/` | hook-written live session sidecars (Classroom tab) |
+| `~/.claudeops/bin/familiard` | familiard, only if `claudeops familiard install` put it there |
 | `~/.claude/projects/*.jsonl` | source data — read only |
 | `~/.codex/sessions/**/*.jsonl` | Codex source data — read only (override the parent dir with `CODEX_HOME`) |
 | `$XDG_DATA_HOME/opencode/opencode.db` | opencode source data — read only (default `~/.local/share`; the conventional path is still probed as a fallback) |

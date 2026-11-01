@@ -72,7 +72,8 @@ type Model struct {
 
 	// ui state
 	activeTab Tab
-	subFocus  int // subscription selector: 0 = all, 1..N focuses one provider
+	classroom *classroomPets // nil keeps the Classroom's monkeys, with nothing said about it
+	subFocus  int            // subscription selector: 0 = all, 1..N focuses one provider
 	viewport  viewport.Model
 	width     int
 	height    int
@@ -686,6 +687,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Height = vpH
 		}
 		m.refreshViewport()
+	case familiarsListedMsg:
+		m.classroom.listed(msg)
+		m.refreshViewport()
+	case familiarLoadedMsg:
+		m.classroom.loaded(msg)
+		m.refreshViewport()
+	case classroomFrameMsg:
+		m.classroom.ticking = false
+		if m.activeTab == TabClassroom {
+			m.refreshViewport()
+		}
 	case tickMsg:
 		if m.statusMsg != "" && time.Now().After(m.statusUntil) {
 			m.statusMsg = ""
@@ -812,6 +824,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, vpCmd)
 		}
 	}
+	cmds = append(cmds, m.classroom.next(m.activeTab == TabClassroom, m.LiveSessions)...)
 	return m, tea.Batch(cmds...)
 }
 
