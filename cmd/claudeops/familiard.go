@@ -48,7 +48,7 @@ func cmdFamiliardWith(out io.Writer, args []string, dir string, installer func(i
 	switch args[0] {
 	case "install":
 		if found != nil && !mine {
-			fmt.Fprintf(out, "you already have familiard at %s; the Classroom tab will use it\n", found.Path)
+			_, _ = fmt.Fprintf(out, "you already have familiard at %s; the Classroom tab will use it\n", found.Path)
 			return nil
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), familiardInstallTimeout)
@@ -57,27 +57,27 @@ func cmdFamiliardWith(out io.Writer, args []string, dir string, installer func(i
 		if err != nil {
 			return fmt.Errorf("familiard: %w", err)
 		}
-		fmt.Fprintf(out, "installed %s\nopen the Classroom tab to see your familiars\n", path)
+		_, _ = fmt.Fprintf(out, "installed %s\nopen the Classroom tab to see your familiars\n", path)
 		return nil
 	case "status":
 		if found == nil {
-			fmt.Fprintln(out, "familiard is not installed; the Classroom tab shows monkeys (claudeops familiard install)")
+			_, _ = fmt.Fprintln(out, "familiard is not installed; the Classroom tab shows monkeys (claudeops familiard install)")
 			return nil
 		}
-		fmt.Fprintf(out, "using %s (%s)\n", found.Path, familiardVersion(found.Path))
+		_, _ = fmt.Fprintf(out, "using %s (%s)\n", found.Path, familiardVersion(found.Path))
 		return nil
 	case "remove", "uninstall":
 		// Only ever our own copy, even when another one is the one in use.
 		err := os.Remove(own)
 		switch {
 		case err == nil:
-			fmt.Fprintf(out, "removed %s; your pets are still in familiard's gallery\n", own)
+			_, _ = fmt.Fprintf(out, "removed %s; your pets are still in familiard's gallery\n", own)
 		case !os.IsNotExist(err):
 			return fmt.Errorf("familiard: %w", err)
 		case found != nil:
-			fmt.Fprintf(out, "%s was not installed by claudeops, so it stays\n", found.Path)
+			_, _ = fmt.Fprintf(out, "%s was not installed by claudeops, so it stays\n", found.Path)
 		default:
-			fmt.Fprintln(out, "claudeops has not installed familiard")
+			_, _ = fmt.Fprintln(out, "claudeops has not installed familiard")
 		}
 		return nil
 	default:

@@ -79,7 +79,7 @@ func (in Installer) Install(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(in.Log, "downloading %s\n", asset)
+	_, _ = fmt.Fprintf(in.Log, "downloading %s\n", asset)
 	data, err := in.fetch(ctx, in.FilesURL+"/"+tag+"/"+asset)
 	if err != nil {
 		return "", err
@@ -272,7 +272,7 @@ func (in Installer) addDemo(ctx context.Context, program string, files map[strin
 	}
 	folder, err := os.MkdirTemp("", "familiard-demo-")
 	if err != nil {
-		fmt.Fprintf(in.Log, "the demo pet was not added: %v\n", err)
+		_, _ = fmt.Fprintf(in.Log, "the demo pet was not added: %v\n", err)
 		return
 	}
 	defer func() { _ = os.RemoveAll(folder) }()
@@ -282,11 +282,11 @@ func (in Installer) addDemo(ctx context.Context, program string, files map[strin
 			continue
 		}
 		if err := os.WriteFile(filepath.Join(folder, base), content, 0o600); err != nil {
-			fmt.Fprintf(in.Log, "the demo pet was not added: %v\n", err)
+			_, _ = fmt.Fprintf(in.Log, "the demo pet was not added: %v\n", err)
 			return
 		}
 	}
 	if err := in.AddDemo(ctx, program, folder); err != nil {
-		fmt.Fprintf(in.Log, "the demo pet was not added: %v\n", err)
+		_, _ = fmt.Fprintf(in.Log, "the demo pet was not added: %v\n", err)
 	}
 }

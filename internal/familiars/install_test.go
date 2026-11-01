@@ -59,12 +59,12 @@ func release(t *testing.T, asset string, data []byte, sums string) *httptest.Ser
 		sums = hex.EncodeToString(sum[:]) + "  " + asset + "\n"
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/latest":
-			fmt.Fprint(w, `{"tag_name":"v9.9.9"}`)
-		case r.URL.Path == "/files/v9.9.9/SHA256SUMS":
-			fmt.Fprint(w, sums)
-		case r.URL.Path == "/files/v9.9.9/"+asset:
+		switch r.URL.Path {
+		case "/latest":
+			_, _ = fmt.Fprint(w, `{"tag_name":"v9.9.9"}`)
+		case "/files/v9.9.9/SHA256SUMS":
+			_, _ = fmt.Fprint(w, sums)
+		case "/files/v9.9.9/" + asset:
 			_, _ = w.Write(data)
 		default:
 			http.NotFound(w, r)
@@ -219,7 +219,7 @@ func TestDownloadsHaveALimit(t *testing.T) {
 func TestAStrangeReleaseNameIsRefused(t *testing.T) {
 	for _, tag := range []string{"../../evil", "latest", "v1.2", ""} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			fmt.Fprintf(w, `{"tag_name":%q}`, tag)
+			_, _ = fmt.Fprintf(w, `{"tag_name":%q}`, tag)
 		}))
 		in := installer(server, t.TempDir(), "linux", "amd64")
 		if _, err := in.Install(context.Background()); err == nil || !strings.Contains(err.Error(), "unexpected release") {
