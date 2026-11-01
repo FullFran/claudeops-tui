@@ -40,7 +40,7 @@ gofmt+vet behavior now lives in `make fmt-check` and `make vet`.
 
 ## Architecture
 
-Entry point: `cmd/claudeops/main.go` — subcommand router with variable function pointers (testable). Default command launches the TUI. Subcommands: `task`, `ingest`, `reingest`, `update`, `hooks`, `push`, `otel-config`, `statusline`, `agy`, `mcp`, `version`, `help`.
+Entry point: `cmd/claudeops/main.go` — subcommand router with variable function pointers (testable). Default command launches the TUI. Subcommands: `task`, `ingest`, `reingest`, `update`, `hooks`, `push`, `otel-config`, `statusline`, `agy`, `familiard`, `mcp`, `version`, `help`.
 
 ### Data Flow
 
@@ -75,6 +75,7 @@ $XDG_DATA_HOME/opencode/opencode.db   (opencode, default ~/.local/share)
 - **usage** — OAuth client for `/api/oauth/usage`. The load→refresh→save sequence runs under an exclusive advisory lock on a sidecar `~/.claude/.credentials.json.lock` file (the credentials file itself is replaced by rename, which would drop a lock taken on its inode). Writes are temp file + fsync + rename with mode 0600, and unknown `claudeAiOauth` fields are round-tripped verbatim. `expiresAt` is read in whatever unit the file uses (Claude Code writes milliseconds) and written back in the same unit. Concurrent `Get()` calls are single-flighted; 429/5xx and transport failures are negative-cached with `Retry-After` backoff.
 - **provider** — pluggable live-quota adapters beyond Anthropic (Codex, Copilot, Gemini, Antigravity) plus user-defined HTTP providers from `~/.claudeops/providers.toml`. A provider whose credentials are absent is skipped silently. `Antigravity` is the exception: it has no credential or live endpoint of its own — it just reads the quota snapshot `claudeops agy statusline` last wrote to `~/.claudeops/antigravity-quota.json`, dropping any bucket whose reset time has already passed.
 - **live** — discovers active Claude Code sessions by scanning `~/.claude/projects` mtimes, overlaid with hook-written sidecars in `~/.claudeops/live`. Feeds the Classroom tab.
+- **familiars** — optional familiard pets for the Classroom tab. `Client` runs the `familiard` program for `pets --json` and `frames`, so the sheet format stays in familiard and this repo stays free of image decoding; a program on `PATH` always wins over `~/.claudeops/bin`. `Assigner` gives each session a pet. `Installer` downloads a release into that folder only, after checking `SHA256SUMS`, and takes files by their exact place in the archive.
 - **hooks** — installs and removes claudeops entries for the `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` events in `~/.claude/settings.json`, and handles those events on stdin.
 - **export** — OTLP metric push (`claudeops push`) and management of the Claude Code OTel env vars in `~/.claude/settings.json` (`claudeops otel-config`).
 - **insights** — 5 computed insights: cache efficiency, model mix, cost trend, session efficiency, peak hours.
@@ -112,6 +113,7 @@ Conventional commits only: `type(scope): subject`. Types: `feat`, `fix`, `docs`,
 - `~/.claudeops/providers.toml` — Optional user-defined quota providers
 - `~/.claudeops/current-task.json` — Active task sidecar
 - `~/.claudeops/live/` — Hook-written live session sidecars (Classroom tab)
+- `~/.claudeops/bin/familiard` — only if `claudeops familiard install` put it there
 - `~/.claudeops/antigravity-quota.json` — Antigravity (agy) quota snapshot, written by `claudeops agy statusline`, mode 0600
 - `~/.claude/projects/*.jsonl` — Claude Code source data (read-only)
 - `~/.gemini/antigravity-cli/conversations/*.db` — agy source data, one SQLite per conversation (read-only)

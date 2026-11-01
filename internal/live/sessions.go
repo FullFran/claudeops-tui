@@ -7,6 +7,9 @@
 //   - waiting: file mtime older than WorkingWindow but within ActiveWindow,
 //     OR last event is an assistant turn (waiting for next user prompt)
 //   - idle:    file mtime older than ActiveWindow → excluded from results
+//
+// Recent files only suggest a session is alive: a closed one looks the same for
+// half an hour. So when Claude Code lists its running sessions, that list decides.
 package live
 
 import (
@@ -70,6 +73,11 @@ type Config struct {
 	// set, sidecars override the mtime-based state and keep sessions visible
 	// even if the JSONL mtime is stale.
 	LiveDir string
+	// SessionsDir — where Claude Code lists its running sessions, one file per
+	// process (~/.claude/sessions). When it exists, a session whose process is
+	// gone is dropped however recent its files are. Empty or missing means going
+	// by recent activity alone.
+	SessionsDir string
 	// Now is an override for testing. Zero means time.Now().
 	Now func() time.Time
 }
@@ -99,6 +107,68 @@ func (c Config) now() time.Time {
 // depth 2 (project-dir/session.jsonl), filters by mtime and returns the
 // classified live sessions sorted by most-recent first.
 func Scan(root string, cfg Config) ([]Session, error) {
+	sessions, err := scanRecent(root, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return keepRunning(sessions, cfg), nil
+}
+
+// keepRunning drops sessions whose process has ended. A session that is not listed but wrote
+// something just now stays: whatever is writing it is alive, even if Claude Code does not list it.
+func keepRunning(sessions []Session, cfg Config) []Session {
+	running, ok := runningSessions(cfg.SessionsDir)
+	if !ok {
+		return sessions
+	}
+	workingCutoff := cfg.now().Add(-cfg.workingWindow())
+	var out []Session
+	for _, s := range sessions {
+		if running[s.SessionID] || s.ModTime.After(workingCutoff) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// runningSessions reads the ids of the sessions whose process is alive. It says false when Claude
+// Code keeps no such list here, which older versions do not, or when none of it can be read, since
+// the format is Claude Code's own and may change: not knowing must not empty the classroom.
+func runningSessions(dir string) (map[string]bool, bool) {
+	if dir == "" {
+		return nil, false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, false
+	}
+	running := map[string]bool{}
+	files, understood := 0, 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		files++
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var listed struct {
+			PID       int    `json:"pid"`
+			SessionID string `json:"sessionId"`
+		}
+		if json.Unmarshal(data, &listed) != nil || listed.SessionID == "" {
+			continue
+		}
+		understood++
+		if processAlive(listed.PID) {
+			running[listed.SessionID] = true
+		}
+	}
+	return running, files == 0 || understood > 0
+}
+
+func scanRecent(root string, cfg Config) ([]Session, error) {
 	now := cfg.now()
 	cutoff := now.Add(-cfg.activeWindow())
 	workingCutoff := now.Add(-cfg.workingWindow())

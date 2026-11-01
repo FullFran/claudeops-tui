@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/fullfran/claudeops-tui/internal/familiars"
 	"github.com/fullfran/claudeops-tui/internal/live"
 )
 
@@ -57,32 +58,40 @@ func renderClassroomTab(m Model) string {
 
 	sb.WriteString(headerStyle.Render("Classroom — live Claude Code sessions") + "  ")
 	sb.WriteString(dimStyle.Render(fmt.Sprintf("(%d)", len(m.LiveSessions))) + "\n")
-	sb.WriteString(dimStyle.Render("  ✨ working      💤 waiting for input") + "\n\n")
+	sb.WriteString(dimStyle.Render("  ✨ working      💤 waiting for input") + "\n")
+	if hint := m.classroom.hint(); hint != "" {
+		sb.WriteString(dimStyle.Render("  "+hint) + "\n")
+	}
+	sb.WriteString("\n")
 
 	if len(m.LiveSessions) == 0 {
 		sb.WriteString(emptyClassroom())
 		return sb.String()
 	}
 
-	// Decide columns that fit the viewport width. One desk + 2-space gutter.
-	cols := 1
-	if m.width > 0 {
-		cols = (m.width + 2) / (deskWidth + 2)
-		if cols < 1 {
-			cols = 1
-		}
-	}
-
-	// Render desks in row-major order.
-	frame := animFrame(time.Now())
+	// Render desks in row-major order, flowing them to fit the viewport. A desk with a familiar
+	// is wider than a monkey's, so each row fills up by what it really holds. One desk + 2-space
+	// gutter; a row always takes at least one desk.
+	now := time.Now()
+	frame := animFrame(now)
 	rows := [][]string{}
 	var row []string
-	for i, s := range m.LiveSessions {
-		row = append(row, renderDesk(s, frame))
-		if (i+1)%cols == 0 {
-			rows = append(rows, row)
-			row = nil
+	used := 0
+	for _, s := range m.LiveSessions {
+		desk := renderDesk(s, frame)
+		if pack := m.classroom.packFor(s.SessionID); pack != nil {
+			desk = renderFamiliarDesk(s, pack, now)
 		}
+		width := lipgloss.Width(desk)
+		if len(row) > 0 && (m.width <= 0 || used+2+width > m.width) {
+			rows = append(rows, row)
+			row, used = nil, 0
+		}
+		if len(row) > 0 {
+			used += 2
+		}
+		row = append(row, desk)
+		used += width
 	}
 	if len(row) > 0 {
 		rows = append(rows, row)
@@ -111,6 +120,31 @@ func renderDesk(s live.Session, frame int) string {
 		return deskStyleWorking.Render(inner)
 	}
 	return deskStyleWaiting.Render(inner)
+}
+
+// clipFor says which of a familiar's animations fits a session's state.
+func clipFor(st live.State) string {
+	switch st {
+	case live.StateWorking:
+		return "working"
+	case live.StateWaiting:
+		return "waiting"
+	default:
+		return "idle"
+	}
+}
+
+// renderFamiliarDesk paints a desk with the session's familiar in place of the monkey.
+func renderFamiliarDesk(s live.Session, pack *familiars.Pack, now time.Time) string {
+	inner := pack.Frame(clipFor(s.State), now, familiars.Seed(s.SessionID)) + "\n" +
+		labelStyle.Render(truncate(s.ProjectName, pack.Columns)) + "\n" +
+		pathStyle.Render(truncate(pack.Name+" · "+s.State.String(), pack.Columns)) + "\n" +
+		pathStyle.Render(truncate(s.SessionID, pack.Columns))
+	style := deskStyleWaiting
+	if s.State == live.StateWorking {
+		style = deskStyleWorking
+	}
+	return style.Width(pack.Columns + 2).Render(inner)
 }
 
 // monkeyFor returns the ASCII monkey face + badge glyph + styles for a state.

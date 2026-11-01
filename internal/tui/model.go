@@ -41,6 +41,7 @@ type Model struct {
 	Version         string
 	ProjectsRoot    string // ~/.claude/projects — scanned for live sessions
 	LiveDir         string // ~/.claudeops/live — hook-written session sidecars
+	SessionsDir     string // where Claude Code lists its running sessions
 	UpdateCachePath string // ~/.claudeops/update-cache.json
 	UpdateAvailable string // newer version available (e.g. "0.17.0"), empty if none
 	UpdateStatus    string // summary of update status for settings/status
@@ -72,7 +73,8 @@ type Model struct {
 
 	// ui state
 	activeTab Tab
-	subFocus  int // subscription selector: 0 = all, 1..N focuses one provider
+	classroom *classroomPets // nil keeps the Classroom's monkeys, with nothing said about it
+	subFocus  int            // subscription selector: 0 = all, 1..N focuses one provider
 	viewport  viewport.Model
 	width     int
 	height    int
@@ -471,7 +473,7 @@ func refreshCmd(m Model) tea.Cmd {
 			}
 		}
 		if m.ProjectsRoot != "" || m.LiveDir != "" {
-			if sessions, err := live.Scan(m.ProjectsRoot, live.Config{LiveDir: m.LiveDir}); err == nil {
+			if sessions, err := live.Scan(m.ProjectsRoot, live.Config{LiveDir: m.LiveDir, SessionsDir: m.SessionsDir}); err == nil {
 				msg.liveSessions = sessions
 			}
 		}
@@ -597,7 +599,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if tabVisible(t, m.Settings) {
 				m.selectTab(t)
 			}
-			return m, nil
+			return m, tea.Batch(m.classroom.next(m.activeTab == TabClassroom, m.LiveSessions)...)
 		case " ":
 			if m.activeTab == TabSettings {
 				items := settingsItems()
@@ -686,6 +688,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Height = vpH
 		}
 		m.refreshViewport()
+	case familiarsListedMsg:
+		m.classroom.listed(msg)
+		m.refreshViewport()
+	case familiarLoadedMsg:
+		m.classroom.loaded(msg)
+		m.refreshViewport()
+	case classroomFrameMsg:
+		m.classroom.ticking = false
+		if m.activeTab == TabClassroom {
+			m.refreshViewport()
+		}
 	case tickMsg:
 		if m.statusMsg != "" && time.Now().After(m.statusUntil) {
 			m.statusMsg = ""
@@ -812,6 +825,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, vpCmd)
 		}
 	}
+	cmds = append(cmds, m.classroom.next(m.activeTab == TabClassroom, m.LiveSessions)...)
 	return m, tea.Batch(cmds...)
 }
 
