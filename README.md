@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" alt="claudeops-tui logo" width="120" height="120"></p>
+
 # claudeops-tui
 
 Local TUI to track Claude Code usage, costs, and tasks. Single binary, no daemon, no SaaS.
